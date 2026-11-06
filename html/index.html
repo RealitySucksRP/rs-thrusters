@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>RS Thrusters</title>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<section id="hud" class="hud hidden" aria-label="Thruster flight status">
+  <div class="head"><span class="logo">RS <b>THRUSTERS</b></span><span class="state" id="state">STANDBY</span></div>
+  <div class="readouts"><div><small>GAS PRESSURE</small><strong id="pressure">100%</strong></div><div><small>ALTITUDE</small><strong id="altitude">0.0<em>m</em></strong></div><div><small>THRUST</small><strong id="thrust">0%</strong></div></div>
+  <div class="track"><div id="gasfill" class="fill"></div></div>
+  <div class="stability"><strong id="stability">STANDBY</strong><span id="attitude">0° · 0°/s</span></div>
+  <div class="jet-title">NOZZLES <span>SIM RPM / THRUST</span></div>
+  <div class="jets" id="jets"></div>
+  <div class="foot"><span id="mode">ASSISTED</span><span id="hover">HOVER OFF</span><span id="land">LANDING ON</span><span class="keyhint">F7 <span>SETTINGS</span></span></div>
+</section>
+<section id="settings" class="settings hidden" aria-labelledby="settingsTitle" aria-modal="true" role="dialog">
+ <div class="panel">
+   <header><div><span class="eyebrow">REALITY SUCKS SCRIPTS</span><h1 id="settingsTitle">FLIGHT CONTROLLER</h1><p>Cold-gas propulsion • flight controller</p></div><button id="close" class="close" aria-label="Close settings">×</button></header>
+   <div class="split"><div class="controlbox"><label for="flightMode">FLIGHT MODE</label><select id="flightMode"><option value="assisted">Assisted · self-leveling</option><option value="sport">Sport · reduced correction</option><option value="manual">Manual · full control</option></select><p>With hover off, use normal jump controls. Landing assist steadies the car on final descent.</p></div><div class="controlbox"><label>ASSIST OPTIONS</label><label class="toggle"><input id="landing" type="checkbox" checked><span>Descent braking</span></label><label class="toggle"><input id="showHud" type="checkbox" checked><span>Show compact HUD</span></label><label class="toggle"><input id="chaseCam" type="checkbox" checked><span>Rear flight camera</span></label></div></div>
+   <div class="controlbox"><label for="hoverStyle">HOVER CONTROLS</label><select id="hoverStyle"><option value="car">Car · stick turns the nose</option><option value="helicopter">Helicopter · stick slides, right stick turns</option></select><label class="toggle"><input id="stickPitch" type="checkbox"><span>Xbox right stick up/down tilts the nose (Helicopter)</span></label><p>Helicopter: Space / A climbs, Ctrl / B descends. Release to hold altitude.</p></div>
+   <div class="split ranges"><div class="controlbox"><label for="output">THRUSTER OUTPUT <strong id="outValue">100%</strong></label><input id="output" type="range" min="25" max="100" step="5" value="100"><p>Limit jet force for smoother control.</p></div><div class="controlbox"><label for="target">HOVER TARGET <strong id="targetValue">3.2m</strong></label><input id="target" type="range" min="1.5" max="10" step="0.5" value="3"><p>Used when hover is switched on.</p></div></div>
+   <div class="controlbox tank-settings">
+     <label for="tankDuration">TANK DURATION <strong id="tankValue"></strong></label>
+     <input id="tankDuration" type="range" min="60" max="600" step="1" value="180">
+     <p id="tankHelp"></p>
+   </div>
+   <div class="controlbox tank-settings">
+    <label for="fxStyle">EXHAUST COLORS</label>
+    <select id="fxStyle"><option value="stock">Stock white</option><option value="solid">Solid color</option><option value="speed">Color by speed</option></select>
+    <div class="fx-colors">
+     <label>Solid <input type="color" id="fx-solid" value="#5bdcff"></label>
+     <label>Low speed <input type="color" id="fx-slow" value="#5bdcff"></label>
+     <label>High speed <input type="color" id="fx-fast" value="#b95cff"></label>
+     <label>Max thrust <input type="color" id="fx-overrun" value="#ff7138"></label>
+    </div>
+   </div>
+   <div class="instructions"><h2>CONTROLS</h2><div><span><b>G</b> Toggle</span><span><b>Space / A</b> Lift</span><span><b>Shift / R3 (hold)</b> Boost</span><span><b>H / X</b> Hover</span><span><b>Mouse</b> Look around while hovering</span><span><b>W / S · RT / LT</b> Hover throttle</span><span><b>A / D</b> Slide while hovering</span><span><b>Left stick left / right</b> Turn in Car mode · Slide in Helicopter mode</span><span><b>Left / Right arrows · Right stick</b> Turn in Helicopter mode</span><span><b>Alt + Arrows · LB + Left stick</b> Flip or roll</span></div></div>
+   <footer><span>Right-stick pitch is saved on this client.</span><button id="done">APPLY / CLOSE</button></footer>
+ </div>
+</section>
+<script src="app.js"></script>
+</body>
+</html>

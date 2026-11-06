@@ -1,0 +1,22 @@
+-- Paste these entries INSIDE your existing ox_inventory/data/items.lua table.
+-- Do not replace the entire file with this example.
+
+['rs_thruster_kit'] = {
+    label = 'Cold-Gas Thruster Kit',
+    description = 'Install a directional cold-gas thruster system on an automobile.',
+    weight = 6000,
+    stack = false,
+    close = true,
+    consume = 0, -- server removes item ONLY after verified installation
+    client = { export = 'rs-thrusters.installKit' },
+},
+
+['rs_thruster_refill'] = {
+    label = 'Thruster Gas Cartridge',
+    description = 'Refill the thruster system on an installed vehicle.',
+    weight = 1800,
+    stack = true,
+    close = true,
+    consume = 0, -- server removes item ONLY after verified refilling
+    client = { export = 'rs-thrusters.refillKit' },
+},
