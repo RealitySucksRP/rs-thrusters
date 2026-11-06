@@ -7,7 +7,6 @@
 <img width="1644" height="890" alt="hoover 6" src="https://github.com/user-attachments/assets/af55dff1-6366-40c4-a3cb-598ba561bf80" />
 <img width="1639" height="920" alt="Hoover 5" src="https://github.com/user-attachments/assets/8334153d-9e28-4540-902e-425365343e7e" />
 <img width="1655" height="911" alt="Hoover 4" src="https://github.com/user-attachments/assets/f8497db2-1752-4bda-8d2e-f207c0b52905" />
-<img width="1672" height="941" alt="Heromain2" src="https://github.com/user-attachments/assets/eb2abe86-5baf-4d96-b0ef-69bc431b7db6" />
 <img width="800" height="450" alt="Hero main" src="https://github.com/user-attachments/assets/4f6560c9-e456-4a05-b712-aa1595ee9696" />
 
 
