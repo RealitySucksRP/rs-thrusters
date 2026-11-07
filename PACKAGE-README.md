@@ -1,105 +1,119 @@
-# RS Thrusters | Full Source FiveM Resource
+# RS Thrusters v0.1.69
 
-**Version:** 0.1.53  
-**Author:** Reality Sucks Scripts  
-**Price:** FREE  
-**Source:** Complete, readable Lua/HTML/CSS/JavaScript source; no escrow or code obfuscation.
+Installable directional thrusters for FiveM automobiles, with assisted hover, native angular-velocity stabilization, full 360-degree stunts, and synchronized vapor effects.
 
-## Overview
+## Installation and update path
 
-RS Thrusters is an installable cold-gas-style propulsion and hover-control system for FiveM automobiles. It adds configurable directional jets, visual exhaust, flight assistance, maneuvering and aerial stunt inputs. This is an original GTA V gameplay simulation, not a representation of actual Tesla hardware.
+[GitHub source](https://github.com/RealitySucksRP/rs-thrusters)
 
-## Included features
+Place the resource here, with `fxmanifest.lua` directly inside `rs-thrusters`:
 
-- **14 adjustable nozzle mounts:** four rear, four underbody, two front and four lateral jets.
-- Directional propulsion for upward lift, forward boost, air braking, movement in hover, pitch/roll/yaw and flight stabilization.
-- **Assisted, Sport and Manual** flight modes, plus **Car / Helicopter** hover control layouts.
-- Configurable output and hover target, approach/landing assist and rear flight camera.
-- White vapor FX with selectable exhaust colors, synchronized for nearby players.
-- Compact flight status HUD and transparent F7 settings panel (no fullscreen dark overlay).
-- Keyboard and Xbox controller inputs; vehicle-specific handling depends on model and game physics.
-- Optional inventory kit and refill items, with optional target interaction, persisted by vehicle plate + model.
-- Optional pressure depletion and configurable duration; **unlimited fuel is the default** (`Config.Pressure.ConsumptionEnabled = false`).
-- F8 diagnostics via `/rstdiag` and configuration for nozzle placement and force tuning.
+```text
+server-data/
+  resources/
+    [rs-resources]/
+      rs-thrusters/
+        fxmanifest.lua
+        config.lua
+        client/
+        server/
+        html/
+        data/
+```
 
-## Requirements
+When downloading the GitHub source ZIP, rename the extracted `rs-thrusters-main` folder to **`rs-thrusters`**. Keep this name for the inventory exports.
 
-- FiveM server with OneSync networking and a supported GTA V automobile.
-- No required framework. `ox_inventory` and `ox_target` are optional integrations.
-- No packaged vehicle model, encrypted files, proprietary license checker, or external web service.
+Add to `server.cfg` after optional inventory/target dependencies:
 
-## Install
+```cfg
+ensure rs-thrusters
+```
 
-1. Extract the ZIP so the path is `resources/[rs-resources]/rs-thrusters/fxmanifest.lua` (or another resources folder).
-2. Add `ensure rs-thrusters` to `server.cfg`, then restart the resource/server.
-3. Optional inventory installation: copy the two definitions from `integration/ox_inventory_items.txt` into your existing `ox_inventory/data/items.lua` and restart `ox_inventory`.
-4. Give a player `rs_thruster_kit`; use it near a **parked automobile while on foot**. The optional `ox_target` interaction may also be used. For a depleted tank, use `rs_thruster_refill`.
-5. Enter the installed car and press **G** (keyboard) or **D-pad Down** (Xbox) to arm the system. Press **F7** to configure flight mode and controls.
+OneSync is required for server-side entity validation and replicated state. `ox_inventory` and `ox_target` are optional integrations. The resource stores installs and tank levels in `data/installs.json`, keyed by normalized model and plate.
 
-**Inventory integration:** Keep the supplied item definitions at `consume = 0`. The resource checks ownership and removes items server-side **after** validating a successful operation. Do not configure automatic item consumption separately.
+For updates, back up the resource and preserve your `data/installs.json` and custom configuration. Merge the new configuration keys. Land and park before `restart rs-thrusters`; restarting while airborne interrupts lift. The public source excludes live vehicle records.
 
-**Upgrading:** Back up and retain `data/installs.json` from your existing installation; it stores vehicle installations and tank levels. The distribution ZIP deliberately does not include this file. Do not overwrite an existing storage file when updating.
+## What changed
+
+- Native angular-velocity control drives assisted roll/flip rotation and assisted hover attitude, while thrust handles lift and translation.
+- Geometric chassis tracking follows a full revolution through the inverted position, with acceleration and braking profiles approaching 360 degrees.
+- Native barrel rolls start from one stunt input on any eligible vehicle model. The native controls rotation, braking, and final leveling without the manual direction probes.
+- Peak stunt speed is now 2.50 rad/s for front/back flips and 1.75 rad/s for left/right rolls, 25% above v0.1.67. Braking ramps were adjusted with the speed increase.
+- Controller stunts use **RB**, with the left stick choosing the direction. R3 holds forward boost.
+- Native GTA camera is the default. The rear flight camera is optional in F7 or `/rstcam`.
+- The optional jet-torque roll mode retains saved per-model calibration, including the live-verified Yosemite Rancher signs.
+- Exhaust uses a narrow core and wider downstream vapor layers. F7 offers stock white, solid color, or speed-based colors, with a separate max-thrust color.
+
+See [CHANGELOG.md](CHANGELOG.md) for recent changes and validation status.
 
 ## Controls
 
-| Action | Keyboard | Xbox controller |
-|---|---|---|
-| Arm/disarm thrusters | G | D-pad Down |
-| Raise / lift | Space (hold) | A (hold) |
+Keyboard defaults can be changed under GTA Settings > Key Bindings > FiveM. Existing player overrides take precedence.
+
+| Action | Keyboard | Xbox |
+| --- | --- | --- |
+| Thrusters on/off | G | D-pad Down |
+| Lift / climb | Space | A |
+| Forward boost | Hold Shift | Hold R3 |
 | Hover on/off | H | X |
-| Hover forward / reverse | W / S | RT / LT or left stick forward/back |
-| Helicopter layout: strafe | A / D | Left stick left/right |
-| Helicopter layout: yaw | Left / Right arrows | Right stick left/right |
-| Boost outside hover | Shift (hold) | R3 (hold) |
-| Air brake | Z (hold) | Context-dependent; see F7 |
-| Assisted front flip / right roll | J / K | Hold LB and flick left stick |
-| Manual stunt direction | Left Alt + arrows | Hold LB and flick left stick |
-| Flight options | F7 or `/rstmenu` | F7 from keyboard |
-| Diagnostics | `/rstdiag` | N/A |
+| Hover forward / backward | W / S | RT / LT |
+| Hover sideways in Helicopter mode | A / D | Left stick left / right |
+| Turn in Helicopter mode | Left / Right arrows | Right stick left / right |
+| Descend in Helicopter mode | Left Ctrl | B |
+| Air brake | Z | LB + B in Helicopter mode |
+| Full front/back flip | Alt + Up / Down | Hold RB, center left stick, then flick Up / Down |
+| Full left/right roll | Alt + Left / Right | Hold RB, center left stick, then flick Left / Right |
+| Front flip / right roll / left roll | J / K / L | RB + X also requests right roll |
+| Cancel stunt and stabilize | Backspace | LB + D-pad Up |
+| Settings | F7 | Use keyboard/menu |
 
-When hovering in Helicopter mode, **Space/A climbs** and **Ctrl/B descends**. Releasing the lift/descent input aims to hold the current altitude. Optional right-stick pitch is toggled from F7. In Car mode the side steering behaves differently; review the built-in controls before flight. Other resources (seatbelt, handbrake, etc.) may use overlapping bindings; adjust keyboard bindings through FiveM settings and test controller bindings on your server.
+Helicopter hover holds altitude when climb/descent input is released. In Car hover style, left-stick steering turns the nose instead of sliding. Xbox right-stick vertical pitch is **off by default**; F7 can enable it. Mouse look remains available during hover.
 
-## Configuration
+Assisted full stunts need open air, adequate clearance, and network ownership of the vehicle. The controller steadies or climbs before starting if needed. Use a stunt key or RB and the left stick to start directly.
 
-- `config.lua` controls nozzle locations, force strengths, flight assistance, hover limits, camera behavior, FX and pressure use.
-- Change `Config.Pressure.ConsumptionEnabled = true` to enable gas depletion. You can also disable players choosing the tank duration with `AllowPlayerDuration = false`.
-- `Config.Nozzles` defines normalized mount positions; different vehicles can need different tuning.
-- `Config.Debug` enables additional console debugging. `/rstdiag` prints vehicle and flight state to F8.
+## Commands and diagnostics
 
-### Optional ACE-restricted installation testing
+| Command | Purpose |
+| --- | --- |
+| `/rstmenu` | Open flight settings |
+| `/rststyle` | Switch hover control style |
+| `/rstcam` | Toggle the optional rear flight camera |
+| `/rstflip` / `/rstbackflip` | Full front / back flip |
+| `/rstroll` / `/rstrollleft` | Full right / left barrel roll |
+| `/rstrecover` | Cancel a stunt and request stabilization |
+| `/rstdiag` | Print version, vehicle, named nozzles, forces, pilot inputs, recovery state, and key/controller counters to F8 |
+| `/rstnativecheck` | No-op angular-velocity native binding check |
+| `/rstrollprobe` / `/rstrollprobeleft` | Optional short right / left probes for jet-torque calibration |
 
-Development commands are **off by default**. Server operators who need them can temporarily add:
+Native rolls are enabled by default with `Config.Physics.StuntRollGovernorEnabled`. If an administrator disables that option, the jet-torque roll controller requires calibration. Run both probes from a level, steady hover in open air at least 20 m up. The client saves matching signs per model across thruster toggles and restarts.
+
+## Inventory and developer installation
+
+For `ox_inventory`, merge the entries from [integration/ox_inventory_items.txt](integration/ox_inventory_items.txt) into the existing items table. The kit and refill exports are `rs-thrusters.installKit` and `rs-thrusters.refillKit`. The server validates installation/refill requests and removes an item after a successful action. `ox_target` adds vehicle installation and refill options when available.
+
+For standalone development testing, explicitly enable the gated commands:
 
 ```cfg
 set rs_thrusters_dev_mode 1
 add_ace group.admin rs_thrusters.test allow
 ```
 
-Grant the test account the corresponding `group.admin` principal. As the **driver**, use `/rstinstall` or `/rstrefill`. Remove the dev setting when finished; never grant testing privileges to `builtin.everyone`.
+Then use `/rstinstall` or `/rstrefill` as the driver. These commands are disabled unless developer mode and the ACE permission are enabled.
 
-## Technical limitations / customer information
+## Configuration
 
-- Real vehicle mass, tuning, slope, collisions, network ownership, and steering bindings affect results. Test a vehicle in open space before use on a public server.
-- Automatic stabilization and stunt flips are simulated with GTA physics; behavior is not guaranteed identical on every model or server configuration.
-- Persistent records use **model + normalized plate**. Servers with duplicate plates should integrate an authoritative garage vehicle ID/VIN before relying on them for unique ownership.
-- Particle FX and simulated nozzle RPM are gameplay visuals, not measurements of a real cold-gas system.
-- No custom vehicle model, sound library, custom 3D tank, or installation minigame is included.
-- Server validates upgrade and FX state, but this is not a complete anti-cheat solution against malicious clients.
-- Full Lua and web UI source is provided for inspection and customization. See `LICENSE` for permitted use and redistribution terms.
+- `Config.Pressure.ConsumptionEnabled = false` keeps effective gas pressure full for testing. Set it to `true` for tank consumption.
+- `DefaultDurationSeconds = 180`, `MinDurationSeconds = 60`, and `MaxDurationSeconds = 600` control tank duration. `AllowPlayerDuration` allows the F7 slider within those limits. The baseline is four lift jets at full output. Actual duration depends on active jets and output.
+- `Config.Physics.StuntPitchMaxRate`, `StuntPitchAcceleration`, and `StuntPitchDeceleration` tune front/back flip speed and braking.
+- `StuntRollMaxRate`, `StuntRollGovernorMaxRoll`, and `StuntRollGovernorDeceleration` tune barrel roll speed and braking together.
+- `AssistedHoverMoveSpeed = 14.0` m/s sets the assisted hover movement target. Boost has separate tuning.
+- `Config.FlightCamera.EnabledByDefault = false` leaves GTA's native camera active. A saved player camera preference may override this default.
+- `Config.Fx` controls particle layers, colors, and visual placement. `Config.Nozzles` provides normalized model-relative nozzle geometry; vehicle shape and particle orientation still need visual checks on new models.
 
-## Files
+The RPM display represents simulated nozzle activity. Gas pressure shows a percentage of tank capacity.
 
-```text
-rs-thrusters/
-  fxmanifest.lua
-  config.lua
-  client/main.lua
-  server/main.lua
-  html/index.html
-  html/style.css
-  html/app.js
-  integration/ox_inventory_items.txt
-  data/                    # game creates installs.json here
-  README.md
-  LICENSE
-```
+## Validation status
+
+Live v0.1.67 feedback and logs confirmed all four stunts, including maneuvers while moving. One right-roll attempt reached 359 degrees and then overshot during settling. v0.1.68 kept the native active during that handoff.
+
+v0.1.69 passed Lua syntax checks and 24 simulated native rolls from the stunt request through leveling without reading calibration. The simulation also checked the low-altitude queue, the optional jet-torque gate, and the return to hover when the native is unavailable. The new speed and direct-roll behavior await live FiveM validation.

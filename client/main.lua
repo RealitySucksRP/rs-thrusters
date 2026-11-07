@@ -2,6 +2,9 @@ local RESOURCE = GetCurrentResourceName()
 local input = {lift=false, boost=false, brake=false, mod=false, pitchUp=false, pitchDown=false, rollLeft=false, rollRight=false, yawLeft=false, yawRight=false}
 local enabled, hover, hoverHeight = false, false, Config.UI.HoverTargetDefault
 local preset, trackedVehicle, lastFxMask = nil, 0, 0
+-- Roll signs are verified per model with short right and left probes.
+local rollProbe = nil
+local rollCalibration = {ready=false, [1]=nil, [-1]=nil, actuation=1, feedback=1}
 local lastTransmit, lastSync, lastSyncVehicle = 0, 0, 0
 local emitters, dimensions = {}, {}
 local assetLoaded = false
@@ -370,6 +373,8 @@ local function clearControls(vehicle)
     lastPitchTorque, lastRollTorque, lastWorldLift = 0.0, 0.0, 0.0
     nozzleOutput = {}
     previousFlightRate, previousChassis = nil, nil
+    rollProbe = nil
+    rollCalibration = {ready=false, [1]=nil, [-1]=nil, actuation=1, feedback=1}
     wasLifting, wasHovering, wasPitching = false, false, false
     lastFxMask = 0
     for k in pairs(input) do input[k] = false end
@@ -380,12 +385,37 @@ local function requireEnabled()
     return veh ~= 0 and veh or nil
 end
 
+local function loadRollCalibration(vehicle)
+    local model = GetEntityModel(vehicle)
+    if rollCalibration.model == model then return end
+
+    -- Increment the key revision if the probe or controller changes sign conventions.
+    local key = ('rollCalibration:v1:%s'):format(model)
+    local saved = GetResourceKvpString(key) or Config.VerifiedRollSigns[model] or ''
+    local actuation, feedback = saved:match('^([+-]?1):([+-]?1)$')
+    rollCalibration = {model=model, key=key, ready=actuation ~= nil,
+        actuation=tonumber(actuation) or 1, feedback=tonumber(feedback) or 1}
+    if rollCalibration.ready then
+        local verdict = {actuator=rollCalibration.actuation, feedback=rollCalibration.feedback}
+        rollCalibration[1], rollCalibration[-1] = verdict, verdict
+    end
+end
+
 local function queueStunt(axis, dir)
     local key = axis .. (dir < 0 and '-' or '+')
     stuntPresses[key] = (stuntPresses[key] or 0) + 1
     local veh = requireEnabled()
     if not veh then return end
-    if preset then return end
+    if preset or rollProbe then return end
+    -- Native rolls command the chassis forward axis directly. Only the
+    -- legacy jet-torque controller needs model-specific nozzle signs.
+    if axis == 'roll' and not Config.Physics.StuntRollGovernorEnabled then
+        loadRollCalibration(veh)
+        if not rollCalibration.ready then
+            notice('Jet-torque roll calibration required. Run /rstrollprobe and /rstrollprobeleft at a level hover.')
+            return
+        end
+    end
     local pos = GetEntityCoords(veh)
     local height = math.max(0, pos.z - surfaceBelow(veh, pos))
     local clearance = Config.Physics.StuntClearance
@@ -442,7 +472,7 @@ local function toggleThrusters()
     elseif pressure(veh) > 0 then
         enabled = true
         trackedVehicle = veh
-        notice('Thrusters ON | SPACE lift | SHIFT / R3 boost | H hover | LB + stick stunts')
+        notice('Thrusters ON | SPACE lift | SHIFT / R3 boost | H hover | RB + left stick stunts')
     else
         notice('Thruster pressure empty; refill the tank.')
     end
@@ -465,10 +495,6 @@ RegisterKeyMapping('+rst_thr_brake', 'RS Thrusters - Air brake', 'keyboard', 'Z'
 local function toggleHover()
     local veh = requireEnabled()
     if not veh then return end
-    if input.mod then
-        queueStunt('roll', 1)
-        return
-    end
     local enteringFromAir = false
     local entryHeight = Config.UI.HoverTargetDefault
     if not hover then
@@ -508,7 +534,7 @@ local function toggleHover()
     notice(hover and ('Hover assist ON (%.1fm target%s)'):format(hoverHeight,enteringFromAir and ', airborne' or '') or 'Hover assist OFF')
 end
 RegisterCommand('rst_thr_hover', toggleHover, false)
-RegisterKeyMapping('rst_thr_hover', 'RS Thrusters - Toggle hover / LB + X barrel roll', 'keyboard', 'H')
+RegisterKeyMapping('rst_thr_hover', 'RS Thrusters - Toggle hover', 'keyboard', 'H')
 
 RegisterCommand('+rst_thr_mod', function() input.mod=true end, false)
 RegisterCommand('-rst_thr_mod', function() input.mod=false end, false)
@@ -521,12 +547,20 @@ CreateThread(function()
         local driving = vehicle ~= 0 and installed(vehicle) and not menuOpen and not IsPauseMenuActive()
         if driving and not IsInputDisabled(0) then
             if IsControlJustPressed(0,187) then toggleThrusters() end
-            input.padBoost = false
+            input.padBoost, input.padStunt = false, false
             if enabled then
                 DisableControlAction(0, 79, true) -- Xbox R3, usually vehicle look-behind
                 input.padBoost = GetDisabledControlNormal(0, 79) > 0.5
                 input.mod = IsControlPressed(0,226)
-                if IsControlJustPressed(0,193) then toggleHover() end
+                local rb = IsControlPressed(0,227)
+                input.padStunt = rb == true or rb == 1
+                if input.padStunt then
+                    DisableControlAction(0, 69, true) -- vehicle weapon fire
+                    DisableControlAction(0, 102, true) -- vehicle jump
+                end
+                if IsControlJustPressed(0,193) then
+                    if input.padStunt then queueStunt('roll', 1) else toggleHover() end
+                end
                 if input.mod and IsControlJustPressed(0,172) then ExecuteCommand('rstrecover') end
             end
             local lift = enabled and IsControlPressed(0,191)
@@ -536,7 +570,7 @@ CreateThread(function()
             padLift = lift
         else
             if padLift then onLift(false) end
-            input.padBrake, input.padBoost = false, false
+            input.padBrake, input.padBoost, input.padStunt = false, false, false
             padLift = false
             input.mod = false
         end
@@ -773,6 +807,7 @@ end
 RegisterCommand('rstdiag', function()
     local veh = driverVehicle()
     if veh == 0 then return notice('Not driving an eligible car.') end
+    loadRollCalibration(veh)
     local rot = GetEntityRotation(veh, 2)
     local omega = GetEntityRotationVelocity(veh)
     print(('^3[rs-thrusters DIAG]^7 version=%s netId=%s plate=%s model=%s installed=%s mode=%s hover=%s pressure=%.1f mask=%d networkControl=%s AGL=%.2f'):format(
@@ -787,6 +822,15 @@ RegisterCommand('rstdiag', function()
         print('[rs-thrusters][STUNT] idle')
     end
     local applying = enabled and not menuOpen and NetworkHasControlOfEntity(veh)
+    print(('[rs-thrusters][ROLL SIGN] verified=%s right=%s left=%s actuator=%+d feedback=%+d probe=%s required=%s'):format(
+        tostring(rollCalibration.ready),tostring(rollCalibration[1] ~= nil),
+        tostring(rollCalibration[-1] ~= nil),rollCalibration.actuation,rollCalibration.feedback,
+        rollProbe and rollProbe.phase or 'idle', tostring(not Config.Physics.StuntRollGovernorEnabled)))
+    local fw, rt = GetEntityMatrix(veh)
+    local nativeRollVector = GetEntityRotationVelocity(veh)
+    print(('[rs-thrusters][ROLL FEEDBACK] rightZ=%+.4f matrixRate=%+.3f nativeForwardRate=%+.3f'):format(
+        rt.z,previousChassis and previousChassis.rate and previousChassis.rate.y or 0,
+        dot(fw,nativeRollVector)))
     print(('[rs-thrusters][FORCES] attitudeTorque=%.3f pitch=%.3f roll=%.3f worldLift=%.2f measuredMask=%d'):format(
         applying and lastTorque or 0.0, applying and lastPitchTorque or 0.0,
         applying and lastRollTorque or 0.0, applying and lastWorldLift or 0.0, applying and lastAppliedMask or 0))
@@ -813,9 +857,10 @@ RegisterCommand('rstdiag', function()
         print(('[rs-thrusters][HOLD] anchor=[%.2f,%.2f] drift=[%.2f,%.2f]'):format(
             hoverAnchor.x, hoverAnchor.y, pos.x - hoverAnchor.x, pos.y - hoverAnchor.y))
     end
-    print(('[rs-thrusters][RECOVERY] stableSince=%dms active=%s lastContact=%s braking=%s catchingHover=%s'):format(
+    print(('[rs-thrusters][RECOVERY] stableSince=%dms active=%s lastContact=%s braking=%s catchingHover=%s nativeAttitude=%s'):format(
         recoveryStableSince > 0 and GetGameTimer() - recoveryStableSince or 0,
-        tostring(hoverRecovering), tostring(lastContact), tostring(assistedSpinBraking), tostring(catchingHover)))
+        tostring(hoverRecovering), tostring(lastContact), tostring(assistedSpinBraking), tostring(catchingHover),
+        tostring(lastPilot.nativeAttitude == true)))
     local keys = {}
     for _, key in ipairs({'W','A','S','D','UP','DOWN','LEFT','RIGHT','LMENU','J','K','L','NUMPAD8','NUMPAD2','NUMPAD4','NUMPAD6'}) do
         keys[#keys+1] = ('%s=%d'):format(key, keyPresses[key] or 0)
@@ -823,10 +868,10 @@ RegisterCommand('rstdiag', function()
     print('[rs-thrusters][KEY PRESSES] ' .. table.concat(keys, ' '))
     print(('[rs-thrusters][XBOX STICK] forward=%d back=%d left=%d right=%d'):format(
         stickSeen.forward or 0, stickSeen.back or 0, stickSeen.left or 0, stickSeen.right or 0))
-    print(('[rs-thrusters][STUNT INPUTS] front=%d back=%d left=%d right=%d Alt=%s LB=%s armed=%s'):format(
+    print(('[rs-thrusters][STUNT INPUTS] front=%d back=%d left=%d right=%d Alt=%s RB=%s armed=%s'):format(
         stuntPresses['pitch-'] or 0, stuntPresses['pitch+'] or 0,
         stuntPresses['roll-'] or 0, stuntPresses['roll+'] or 0,
-        tostring(input.stuntKey == true), tostring(input.mod == true), tostring(stuntArmed)))
+        tostring(input.stuntKey == true), tostring(input.padStunt == true), tostring(stuntArmed)))
     notice('Diagnostics printed to F8 console.')
 end, false)
 
@@ -850,7 +895,7 @@ end
 -- All maneuvering forces are created by visible, physical nozzles.
 -- Each nozzle has one exhaust direction (Config.Nozzles[].dir is the force ON the car).
 -- Applying its force at its own local offset creates authentic r x F torque.
-local function applyNozzles(vehicle, levels, pressureFactor, driveHeading, balanceBelly, verticalLift, stuntTorqueGain, jumpLiftDemand)
+local function applyNozzles(vehicle, levels, pressureFactor, driveHeading, balanceBelly, verticalLift, stuntTorqueGain, jumpLiftDemand, nativeAttitude)
     local bounds = modelDimensions(vehicle)
     local mask, thrust = 0, 0
     local output = {}
@@ -891,7 +936,7 @@ local function applyNozzles(vehicle, levels, pressureFactor, driveHeading, balan
                             -driveHeading.x * push, 0.0, 0, false, true, false)
                     end
                     local maneuver = level - side
-                    if maneuver > 0.055 then
+                    if maneuver > 0.055 and not (nativeAttitude and kind == 'side') then
                         local force = maneuver * scale
                         ApplyForceToEntity(vehicle, 0, dir[1]*force, dir[2]*force, dir[3]*force,
                             x,y,z, 0, true, true, true, false, true)
@@ -917,7 +962,7 @@ local function applyNozzles(vehicle, levels, pressureFactor, driveHeading, balan
     -- the signed torque. No SetEntityRotation or scripted teleport is used.
     local gain = stuntTorqueGain or 1.0
     lastPitchTorque, lastRollTorque, lastWorldLift = 0.0, 0.0, bellyTotal
-    if math.abs(pitchTorque) + math.abs(rollTorque) > 0.025 then
+    if gain > 0.0 and math.abs(pitchTorque) + math.abs(rollTorque) > 0.025 then
         lastPitchTorque, lastRollTorque = pitchTorque * gain, rollTorque * gain
         -- Use explicit world axes for the torque so an inverted or banked
         -- car gets the same body-relative correction as an upright car.
@@ -973,6 +1018,137 @@ local function chassisAngularVelocity(vehicle, forward, right, up, now)
     return rate
 end
 
+local function scalarSign(value)
+    return value < 0 and -1 or 1
+end
+
+-- A near-upright chassis supplies an INDEPENDENT observable roll direction:
+-- positive roll about local +forward lowers the right wheel (right.z decreases).
+-- Compare this with native angular velocity projected onto the forward vector
+-- and with the matrix-derived feedback used by the stunt controller.
+local function startRollProbe(dir)
+    local veh = requireEnabled()
+    if not veh then return end
+    if preset or rollProbe then return notice('Finish the current stunt or probe first.') end
+    if not hover then return notice('Enable hover (H) before the roll sign probe.') end
+    local forward, right, up = GetEntityMatrix(veh)
+    local now = GetGameTimer()
+    local h = GetEntityHeightAboveGround(veh)
+    local w = GetEntityRotationVelocity(veh)
+    local nativeRoll = dot(forward, w)
+    if h < Config.Physics.RollProbeMinHeight or up.z < Config.Physics.RollProbeMinUpZ
+        or math.abs(nativeRoll) > Config.Physics.RollProbeStartMaxRate then
+        return notice(('Probe needs steady, level hover above %.0f m (now %.1f m).'):format(
+            Config.Physics.RollProbeMinHeight,h))
+    end
+    loadRollCalibration(veh)
+    SetResourceKvp(rollCalibration.key, 'unverified')
+    rollCalibration[dir] = nil
+    rollCalibration.ready = false
+    rollProbe = {vehicle=veh, dir=dir, phase='pulse', start=now, last=now,
+        originRightZ=right.z, previousRightZ=right.z,
+        startNative=nativeRoll, startMeasured=previousChassis and previousChassis.rate and previousChassis.rate.y or 0,
+        command=dir * Config.Physics.RollProbeMix, observed=nil, peak=0.0,
+        sampleNative=0, sampleMatrix=0, sampleGeometry=0, stopSince=nil}
+    print(('[rs-thrusters][ROLL PROBE] %s BEGIN AGL=%.2fm rightZ=%.4f native=%.3f pulse=%.3f duration=%dms'):format(
+        dir > 0 and 'RIGHT' or 'LEFT', h, right.z, nativeRoll,
+        rollProbe.command, Config.Physics.RollProbePulseMs))
+    notice(dir > 0 and 'Right roll sign probe: small pulse, then automatic braking.'
+        or 'Left roll sign probe: small pulse, then automatic braking.')
+end
+
+RegisterCommand('rstrollprobe', function() startRollProbe(1) end, false)
+RegisterCommand('rstrollprobeleft', function() startRollProbe(-1) end, false)
+
+local function updateRollProbe(vehicle, forward, right, up, measured, now)
+    local p = rollProbe
+    if not p then return end
+    if p.vehicle ~= vehicle or not hover or not NetworkHasControlOfEntity(vehicle) then
+        print('[rs-thrusters][ROLL PROBE] canceled: vehicle/hover/network changed')
+        rollProbe = nil
+        return
+    end
+    local w = GetEntityRotationVelocity(vehicle)
+    local native = dot(w, forward)
+    local matrix = measured and measured.y or 0.0
+    local dt = (now - p.last) * 0.001
+    local geometry = dt > 0 and dt <= 0.10 and -((right.z - p.previousRightZ) / dt) or 0.0
+    p.last, p.previousRightZ = now, right.z
+    local angle = -(right.z - p.originRightZ) -- radians for a small, near-upright roll
+    local nativeDelta, matrixDelta = native - p.startNative, matrix - p.startMeasured
+    p.peak = math.max(p.peak,math.abs(native))
+    if p.phase == 'pulse' then
+        if now - p.start >= Config.Physics.RollProbePulseMs
+            or math.abs(native) >= Config.Physics.RollProbeMaxRate
+            or math.abs(angle) >= math.rad(Config.Physics.RollProbeMaxDegrees)
+            or up.z < Config.Physics.RollProbeMinUpZ then
+            p.command = 0.0
+            local minAngle = math.rad(Config.Physics.RollProbeMinDegrees)
+            local coherent = math.abs(angle) >= minAngle
+                and math.abs(nativeDelta) >= Config.Physics.RollProbeMinImpulse
+                and scalarSign(angle) == scalarSign(nativeDelta)
+                and up.z >= Config.Physics.RollProbeMinUpZ
+            local feedbackOK = math.abs(matrixDelta) >= Config.Physics.RollProbeMinImpulse
+            if coherent and feedbackOK then
+                p.observed = {dir=p.dir, actuator=p.dir * scalarSign(angle),
+                    feedback=scalarSign(matrixDelta) * scalarSign(nativeDelta)}
+            end
+            p.phase, p.brakeStart = 'brake', now
+            p.sampleNative, p.sampleMatrix, p.sampleGeometry = nativeDelta, matrixDelta, angle
+            print(('[rs-thrusters][ROLL PROBE] %s PULSE deltaRightZ=%+.5f geomAngle=%+.2fdeg geomRate=%+.3f nativeDelta=%+.3f matrixDelta=%+.3f verified=%s actuation=%s feedback=%s'):format(
+                p.dir > 0 and 'RIGHT' or 'LEFT', right.z-p.originRightZ, math.deg(angle), geometry,
+                nativeDelta, matrixDelta, tostring(p.observed ~= nil),
+                p.observed and tostring(p.observed.actuator) or '?',
+                p.observed and tostring(p.observed.feedback) or '?'))
+        end
+    end
+    if p.phase == 'brake' then
+        -- Never guess the braking polarity. A confirmed pulse supplies it.
+        local actuator = p.observed and p.observed.actuator
+        if actuator then
+            local requestedRate = clamp(-angle * Config.Physics.RollProbeLevelGain,
+                -Config.Physics.RollProbeBrakeMaxRate, Config.Physics.RollProbeBrakeMaxRate)
+            p.command = clamp((requestedRate - native) * Config.Physics.RollProbeBrakeGain * actuator,
+                -Config.Physics.RollProbeBrakeMix, Config.Physics.RollProbeBrakeMix)
+        else
+            p.command = 0.0
+        end
+        if math.abs(native) < Config.Physics.RollProbeStopRate and math.abs(angle) < math.rad(2) then
+            p.stopSince = p.stopSince or now
+        else p.stopSince = nil end
+        local settled = p.stopSince and now - p.stopSince >= Config.Physics.RollProbeStopMs
+        local timedOut = now - p.brakeStart >= Config.Physics.RollProbeBrakeMs
+        local unsafe = math.abs(native) > Config.Physics.RollProbeEmergencyRate or up.z < 0.90
+        if settled or timedOut or unsafe then
+            -- A correct sign is not sufficient: prove braking can reduce the
+            -- spin BEFORE allowing an uninterrupted 360-degree maneuver.
+            local verdict = settled and p.observed or nil
+            rollCalibration[p.dir] = verdict
+            rollProbe = nil
+            if unsafe then hoverRecovering = true end
+            print(('[rs-thrusters][ROLL PROBE] %s FINISH geom=%+.2fdeg native=%+.3f matrix=%+.3f peak=%.3f actuator=%s feedback=%s'):format(
+                p.dir > 0 and 'RIGHT' or 'LEFT',math.deg(angle),native,matrix,p.peak,
+                verdict and tostring(verdict.actuator) or 'UNVERIFIED',
+                verdict and tostring(verdict.feedback) or (unsafe and 'UNSAFE' or timedOut and 'NO BRAKE' or 'UNVERIFIED')))
+            if rollCalibration[1] and rollCalibration[-1]
+                and rollCalibration[1].actuator == rollCalibration[-1].actuator
+                and rollCalibration[1].feedback == rollCalibration[-1].feedback then
+                rollCalibration.actuation = rollCalibration[1].actuator
+                rollCalibration.feedback = rollCalibration[1].feedback
+                rollCalibration.ready = true
+                SetResourceKvp(rollCalibration.key, ('%d:%d'):format(
+                    rollCalibration.actuation, rollCalibration.feedback))
+                print(('[rs-thrusters][ROLL SIGN] CONFIRMED both directions: actuator=%+d matrixFeedback=%+d.'):format(
+                    rollCalibration.actuation,rollCalibration.feedback))
+                notice('Jet-torque roll signs verified in both directions.')
+            else
+                print('[rs-thrusters][ROLL SIGN] NOT VERIFIED: both probe directions must agree for jet-torque rolls.')
+                notice('Roll probe recorded. Check F8 for the jet-torque calibration result.')
+            end
+        end
+    end
+end
+
 local function softZero(value, deadband)
     return value > deadband and value - deadband or (value < -deadband and value + deadband or 0.0)
 end
@@ -992,9 +1168,10 @@ local function hoverInputs(cfg, guidedFlight)
     if not controller or not guidedFlight or hoverStyle ~= 'helicopter' then controllerPitch = 0.0 end
     local x = (input.arrowRight and 1 or 0) - (input.arrowLeft and 1 or 0)
     local y = (input.arrowUp and 1 or 0) - (input.arrowDown and 1 or 0)
-    local modifier = input.stuntKey or (controller and input.mod)
+    local modifier = input.stuntKey or (controller and input.padStunt)
+    local holdForModifier = modifier or (controller and input.mod)
     local steer = 0.0
-    if guidedFlight or modifier or preset then
+    if guidedFlight or holdForModifier or preset then
         local stickX, stickY = takeControl(59), takeControl(60)
         steer = stickX
         if controller then
@@ -1011,12 +1188,12 @@ local function hoverInputs(cfg, guidedFlight)
             stickDirections[name] = pressed
         end
     end
-    if guidedFlight or modifier then
+    if guidedFlight or holdForModifier then
         DisableControlAction(0, 27, true) -- Up arrow otherwise opens the phone.
     end
     local deflection = math.max(math.abs(x), math.abs(y))
     -- A modifier pressed while the stick is already forward must NEVER fire
-    -- a flip. Require an actual neutral-to-flick transition after pressing LB.
+    -- a flip. Require a neutral-to-flick transition after pressing RB.
     if modifier and not stuntModifierWasHeld then
         stuntArmed, stuntHeld = false, false
     end
@@ -1041,7 +1218,7 @@ local function hoverInputs(cfg, guidedFlight)
     local keyboardSlide = (input.moveRight and 1 or 0) - (input.moveLeft and 1 or 0)
     if keyboardDrive ~= 0 then throttle = keyboardDrive end
     if keyboardSlide ~= 0 then steer = keyboardSlide end
-    if modifier then
+    if holdForModifier then
         controllerPitch = 0.0
         return 0.0, 0.0, 0.0, 0.0
     end
@@ -1112,6 +1289,10 @@ local function horizontalHeading(forward, right)
     return {x=x / length, y=y / length}
 end
 
+local function hoverForwardLimit(cfg)
+    return mode == 'assisted' and cfg.AssistedHoverMoveSpeed or cfg.HoverMoveSpeed
+end
+
 local function positionHoldInputs(anchor, pos, heading, cfg)
     local dx, dy = anchor.x - pos.x, anchor.y - pos.y
     local distance = math.sqrt(dx * dx + dy * dy)
@@ -1119,7 +1300,7 @@ local function positionHoldInputs(anchor, pos, heading, cfg)
     local speed = math.min((distance - cfg.HoverPositionDeadband) * cfg.HoverPositionGain, cfg.HoverPositionMaxSpeed)
     local forwardSpeed = (dx * heading.x + dy * heading.y) * speed / distance
     local sideSpeed = (dx * heading.y - dy * heading.x) * speed / distance
-    return forwardSpeed / (forwardSpeed < 0 and cfg.HoverReverseSpeed or cfg.HoverMoveSpeed),
+    return forwardSpeed / (forwardSpeed < 0 and cfg.HoverReverseSpeed or hoverForwardLimit(cfg)),
         sideSpeed / cfg.HoverSlideSpeed
 end
 
@@ -1127,7 +1308,7 @@ local function driveInHover(levels, forward, right, velocity, throttle, dt, fact
     local heading = horizontalHeading(forward, right)
     if not heading then hoverDrive = 0.0; return end
     local speed = velocity.x * heading.x + velocity.y * heading.y
-    local targetSpeed = throttle * (throttle < 0 and cfg.HoverReverseSpeed or cfg.HoverMoveSpeed)
+    local targetSpeed = throttle * (throttle < 0 and cfg.HoverReverseSpeed or hoverForwardLimit(cfg))
     local request = clamp(softZero(targetSpeed - speed, 0.14) * cfg.HoverDriveGain, -cfg.HoverDriveAccel, cfg.HoverDriveAccel)
     local ramp = cfg.HoverDriveAccel * dt / cfg.HoverDriveRamp
     hoverDrive = hoverDrive + clamp(request - hoverDrive, -ramp, ramp)
@@ -1250,7 +1431,7 @@ local function assistedRecoveryMix(forward, right, up, omega, steer, braking, li
     local gain = cfg.HoverRecoveryRateGain
     local pitch = clamp(softZero(pitchRate - omega.x, 0.025) * gain, -limit, limit)
     local roll = clamp(softZero(rollRate - omega.y, 0.025) * gain, -limit, limit)
-    return pitch * cfg.PitchSign, roll * cfg.RollSign
+    return pitch * cfg.PitchSign, roll * cfg.RollSign, pitchRate, rollRate
 end
 
 local function assistedHoverAttitude(forward, right, up, omega, pitchInput, speed, cfg)
@@ -1259,13 +1440,12 @@ local function assistedHoverAttitude(forward, right, up, omega, pitchInput, spee
     local authority = clamp((up.z - 0.82) / 0.16, 0.0, 1.0)
         * math.min(1.0, cfg.JumpFullSteerSpeed / math.max(speed, 0.01))
     pitchError = pitchError + math.sin(math.rad(cfg.HelicopterPitchDegrees) * pitchInput * authority)
-    local function correction(error, rate)
-        local targetRate = clamp(softZero(error, cfg.HoverLevelDeadband) * 1.6, -0.4, 0.4)
-        local limit = cfg.HoverFlightMix
-        return clamp(softZero(targetRate - rate, 0.035) * cfg.HoverRecoveryRateGain, -limit, limit)
-    end
-    return correction(pitchError, omega.x) * cfg.PitchSign,
-        correction(rollError, omega.y) * cfg.RollSign, authority
+    local pitchRate = clamp(softZero(pitchError, cfg.HoverLevelDeadband) * 1.6, -0.4, 0.4)
+    local rollRate = clamp(softZero(rollError, cfg.HoverLevelDeadband) * 1.6, -0.4, 0.4)
+    local limit = cfg.HoverFlightMix
+    local pitch = clamp(softZero(pitchRate - omega.x, 0.035) * cfg.HoverRecoveryRateGain, -limit, limit)
+    local roll = clamp(softZero(rollRate - omega.y, 0.035) * cfg.HoverRecoveryRateGain, -limit, limit)
+    return pitch * cfg.PitchSign, roll * cfg.RollSign, authority, pitchRate, rollRate
 end
 
 local function finishStunt(vehicle, successful, reason)
@@ -1314,7 +1494,218 @@ end
 RegisterCommand('rstrecover', emergencyRecover, false)
 RegisterKeyMapping('rstrecover', 'RS Thrusters - Cancel stunt / stabilize', 'keyboard', 'BACK')
 
-local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput)
+-- During a full roll GTA can introduce pitch/yaw coupling, especially at inversion.
+-- Keep the two non-roll axes damped, without applying any forced orientation.
+-- Input and the usual hover controller are left untouched outside a roll.
+local function rollCrossAxisDamping(omega, forward, startForwardZ, cfg)
+    local limit = cfg.StuntRollCrossMix
+    local pitch = clamp((startForwardZ - forward.z) * cfg.StuntRollPitchHoldGain
+            - omega.x * cfg.StuntRollCrossPitchGain, -limit, limit)
+    local yaw = clamp(-omega.z * cfg.StuntRollCrossYawGain,
+            -cfg.StuntRollYawMix, cfg.StuntRollYawMix)
+    return pitch * cfg.PitchSign, yaw
+end
+
+-- Native angular-speed setter: GTA V build >=2372 provides
+-- SET_ENTITY_ANGULAR_VELOCITY (0x8339643499D1222E). Some FiveM builds do not
+-- generate a Lua global for Cfx's older SET_ENTITY_ROTATION_VELOCITY, so do NOT
+-- use global availability as a feature test. Prefer GTA's native, and invoke
+-- by hash when the Lua wrapper is absent. Neither method teleports/rotates the car.
+local ANGULAR_NATIVE = 0x8339643499D1222E
+local angularSetterBackend, angularSetterFailed = nil, false
+local function writeEntityAngularVelocity(vehicle, x, y, z)
+    if angularSetterFailed then return false end
+    if type(SetEntityRotationVelocity) == 'function' then
+        local ok = pcall(SetEntityRotationVelocity, vehicle, x, y, z)
+        if ok then angularSetterBackend = 'CFX SetEntityRotationVelocity'; return true end
+    end
+    if type(SetEntityAngularVelocity) == 'function' then
+        local ok = pcall(SetEntityAngularVelocity, vehicle, x, y, z)
+        if ok then angularSetterBackend = 'GTA SetEntityAngularVelocity'; return true end
+    end
+    if Citizen and type(Citizen.InvokeNative) == 'function' then
+        local ok = pcall(Citizen.InvokeNative, ANGULAR_NATIVE, vehicle, x, y, z)
+        if ok then angularSetterBackend = 'GTA Citizen.InvokeNative'; return true end
+    end
+    angularSetterFailed = true
+    print('[rs-thrusters][ANGULAR NATIVE] Unavailable; assisted hover falls back to jet torque and native stunts stop.')
+    return false
+end
+
+local function writeChassisRates(vehicle, forward, right, up, pitchRate, rollRate, yawRate)
+    return writeEntityAngularVelocity(vehicle,
+        right.x * pitchRate + forward.x * rollRate + up.x * yawRate,
+        right.y * pitchRate + forward.y * rollRate + up.y * yawRate,
+        right.z * pitchRate + forward.z * rollRate + up.z * yawRate)
+end
+
+local function nativePitchStunt(vehicle, p, measuredOmega, cfg)
+    local now = GetGameTimer()
+    local forward, right, up = GetEntityMatrix(vehicle)
+    local omega = measuredOmega or worldAngularVelocityInLocal(vehicle)
+    local elapsed = (now - p.lastTick) * 0.001
+    local direction = p.dir * cfg.PitchSign
+    local pitchRate = omega.x
+    if p.pitchPreviousForward and elapsed > 0.0 and elapsed <= 0.12 then
+        -- The nose's angle in the previous pitch plane stays continuous through inversion.
+        local step = math.atan(dot(forward, p.pitchPreviousUp), dot(forward, p.pitchPreviousForward))
+        if math.abs(step) <= math.rad(cfg.StuntRollGeometryMaxStepDegrees) then
+            pitchRate = step / elapsed
+            p.progress = math.max(-15.0, p.progress + math.deg(step) * direction)
+        end
+    end
+    p.lastTick, p.pitchPreviousForward, p.pitchPreviousUp = now, forward, up
+    p.lastRate = pitchRate * direction
+    if math.max(math.abs(pitchRate), math.abs(omega.y), math.abs(omega.z)) >= cfg.StuntSpinAbortRate
+        or p.progress >= cfg.StuntHardStopDegrees then
+        finishStunt(vehicle, false, 'uncontrolled flip or off-axis rotation')
+        return 0.0, 0.0, 0.0
+    end
+
+    local remaining = math.rad(cfg.StuntTargetDegrees - p.progress)
+    if p.phase == 'rotate' and math.abs(remaining) <= math.rad(1.0) and math.abs(pitchRate) <= 0.12 then
+        p.phase, p.settleUntil = 'settle', now + cfg.StuntSettleMs
+    end
+    local targetPitch, targetRoll = 0.0, 0.0
+    if p.phase == 'settle' then
+        local stable = up.z > 0.992 and math.abs(pitchRate) + math.abs(omega.y) < 0.20
+            and math.abs(omega.z) < 0.20
+        p.stableSince = stable and (p.stableSince or now) or nil
+        if p.stableSince and now - p.stableSince >= cfg.StuntStableMs then
+            finishStunt(vehicle, true)
+            return 0.0, 0.0, 0.0
+        elseif now >= p.settleUntil then
+            finishStunt(vehicle, false, 'failed to settle level')
+            return 0.0, 0.0, 0.0
+        end
+        local cap = cfg.StuntPitchSettleRate
+        targetPitch = clamp(-forward.z * 1.6, -cap, cap)
+        targetRoll = clamp(right.z * 1.6, -cap, cap)
+    else
+        local rotationElapsed = now - p.started
+        if rotationElapsed >= cfg.StuntMaxMs or (rotationElapsed >= cfg.StuntStallMs
+            and p.progress < cfg.StuntStallDegrees) then
+            finishStunt(vehicle, false, 'flip did not track the requested rotation')
+            return 0.0, 0.0, 0.0
+        end
+        local angle = math.abs(remaining)
+        local startRate = rotationElapsed * 0.001 * cfg.StuntPitchAcceleration
+        local stoppingRate = math.min(math.sqrt(2.0 * cfg.StuntPitchDeceleration * angle), angle * 3.0)
+        targetPitch = math.min(cfg.StuntPitchMaxRate, startRate, stoppingRate) * direction
+        if remaining < 0.0 then targetPitch = -targetPitch end
+    end
+    if not writeChassisRates(vehicle, forward, right, up, targetPitch, targetRoll, 0.0) then
+        finishStunt(vehicle, false, 'angular-velocity native unavailable')
+        return 0.0, 0.0, 0.0
+    end
+    if now - p.lastLog >= 750 then
+        p.lastLog = now
+        print(('[rs-thrusters][PITCH NATIVE] %s %s angle=%.1f pitch=%+.2f target=%+.2f roll=%+.2f yaw=%+.2f'):format(
+            p.name, p.phase, p.progress, pitchRate, targetPitch, omega.y, omega.z))
+    end
+    local visualMix = clamp((targetPitch * direction - p.lastRate) * cfg.StuntRateGain,
+        -cfg.StuntPitchBrakeMix, cfg.StuntPitchDriveMix) * direction
+    return visualMix, 0.0, 0.0
+end
+
+RegisterCommand('rstnativecheck', function()
+    local vehicle = validActiveVehicle()
+    if vehicle == 0 then return notice('Enter a car with the thrusters activated first.') end
+    if not NetworkHasControlOfEntity(vehicle) then return notice('No network control of this car.') end
+    local velocity = GetEntityRotationVelocity(vehicle)
+    if not velocity then return notice('Could not read vehicle angular velocity.') end
+    local ok = writeEntityAngularVelocity(vehicle, velocity.x, velocity.y, velocity.z)
+    print(('[rs-thrusters][ROLL NATIVE] success=%s backend=%s (no-op check)'):format(
+        tostring(ok), angularSetterBackend or 'unavailable'))
+    notice(ok and 'Angular velocity native available; check F8.' or 'Angular velocity native unavailable; native stunts disabled.')
+end, false)
+
+-- The vehicle physics engine can introduce large off-axis rates during an
+-- assisted 360 roll. Cap those rates using the real GTA setter ONLY in a roll.
+-- The native drives rotation during the roll. The jets still hold altitude.
+local lastRollGovernorLog = 0
+local function stuntRollAngularGovernor(vehicle, forward, right, up, now, cfg)
+    local p = preset
+    if not p or p.axis ~= 'roll' or p.climbing or not cfg.StuntRollGovernorEnabled then return end
+    local world = GetEntityRotationVelocity(vehicle)
+    if not world then return end
+    -- Test the native once with the current angular velocity (no extra motion).
+    -- A failed binding MUST NOT silently permit an ungoverned full roll.
+    if not p.nativeChecked then
+        p.nativeChecked = true
+        p.nativeFault = not writeEntityAngularVelocity(vehicle, world.x, world.y, world.z)
+        if not p.nativeFault then
+            print(('[rs-thrusters][ROLL GUARD] active via %s; stunt-only angular velocity control'):format(angularSetterBackend))
+        else
+            return
+        end
+    end
+    if p.nativeFault then return end
+    local pitchRate, rollRate, yawRate = dot(world,right), dot(world,forward), dot(world,up)
+    local safePitch, safeYaw, safeRoll = pitchRate, yawRate, rollRate
+    local phase = p.phase
+    if phase == 'rotate' and p.nativeRollTarget ~= nil then
+        safePitch, safeRoll, safeYaw = 0.0, p.nativeRollTarget, 0.0
+    elseif phase == 'settle' then
+        -- Keep native attitude control through the final leveling phase.
+        -- Releasing it to jet torque here can start another revolution.
+        local cap = cfg.StuntRollGovernorSettleRoll
+        safePitch = clamp(-forward.z * 1.6, -cap, cap)
+        safeRoll = clamp(right.z * 1.6, -cap, cap)
+        safeYaw = 0.0
+    elseif phase == 'abort_brake' then
+        -- A failed-stunt safety handoff must NOT inherit 3-6 rad/s of spin.
+        -- Dampen all axes until the ordinary hover recovery can safely take over.
+        local decay = math.exp(-math.min(GetFrameTime(), 0.05) * cfg.StuntRollAbortAngularDamping)
+        safePitch = clamp(pitchRate * decay, -cfg.StuntRollAbortAngularCap, cfg.StuntRollAbortAngularCap)
+        safeYaw = clamp(yawRate * decay, -cfg.StuntRollAbortAngularCap, cfg.StuntRollAbortAngularCap)
+        safeRoll = clamp(rollRate * decay, -cfg.StuntRollAbortAngularCap, cfg.StuntRollAbortAngularCap)
+    else
+        -- A generous speed cap protects the inversion transition if the GTA
+        -- car's handling or built-in air-control fights physical counter-thrust.
+        safePitch = clamp(pitchRate, -cfg.StuntRollGovernorMaxPitch, cfg.StuntRollGovernorMaxPitch)
+        safeYaw = clamp(yawRate, -cfg.StuntRollGovernorMaxYaw, cfg.StuntRollGovernorMaxYaw)
+        local cap = cfg.StuntRollGovernorMaxRoll
+        local remaining = math.max(0, math.rad(cfg.StuntTargetDegrees - p.progress))
+        -- Limit angular momentum as the car approaches the end of a turn.
+        local brakingCap = math.sqrt(2 * cfg.StuntRollGovernorDeceleration * remaining)
+        if p.progress >= cfg.StuntRollGovernorSlowStart then
+            cap = math.min(cap, math.max(cfg.StuntRollGovernorFinalFloor, brakingCap))
+        end
+        if p.progress >= cfg.StuntTargetDegrees then cap = cfg.StuntRollGovernorSettleRoll end
+        safeRoll = clamp(rollRate, -cap, cap)
+    end
+    local changed = math.abs(safePitch-pitchRate)>0.001 or math.abs(safeYaw-yawRate)>0.001 or math.abs(safeRoll-rollRate)>0.001
+    if not changed then return end
+    if not writeChassisRates(vehicle, forward, right, up, safePitch, safeRoll, safeYaw) then
+        p.nativeFault = true
+        return
+    end
+    p.governorHits = (p.governorHits or 0) + 1
+    if now-lastRollGovernorLog >= cfg.StuntRollGovernorLogMs then
+        lastRollGovernorLog = now
+        if phase == 'rotate' and p.nativeRollTarget ~= nil then
+            local actual = GetEntityRotationVelocity(vehicle)
+            print(('[rs-thrusters][ROLL NATIVE] angle=%.1f command=%+.3f before=%+.3f readback=%+.3f chassis=%+.3f'):format(
+                p.progress, safeRoll, rollRate, dot(actual, forward), (p.geomRate or 0.0) * p.dir * cfg.RollSign))
+        end
+        print(('[rs-thrusters][ROLL GUARD] phase=%s progress=%.1f localBefore=[%+.2f,%+.2f,%+.2f] limited=[%+.2f,%+.2f,%+.2f] hits=%d'):format(
+            phase, p.progress, pitchRate, rollRate, yawRate, safePitch, safeRoll, safeYaw, p.governorHits))
+    end
+end
+
+local function rollSafeAbort(p, why, now)
+    if not p or p.phase == 'abort_brake' then return end
+    p.phase = 'abort_brake'
+    p.abortSince = now
+    p.abortStableSince = nil
+    p.abortReason = why
+    p.governorHits = p.governorHits or 0
+    print(('[rs-thrusters][ROLL SAFETY] braking instead of handing high angular speed to hover recovery: %s, progress=%.1f'):format(
+        why, p.progress))
+end
+
+local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput, measuredOmega)
     if not airborne then
         -- Do not discard the pending command while the climb is lifting off.
         if preset and not preset.climbing then
@@ -1334,52 +1725,227 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput)
         local rz = takeControl(1)
         if math.abs(rz) > cfg.ControllerDeadzone then yaw = yaw - rz*cfg.YawMix end
     end
+    if rollProbe then return 0.0, rollProbe.command, 0.0 end
     if preset then
+        if preset.axis == 'pitch' and cfg.StuntPitchNativeEnabled then
+            return nativePitchStunt(vehicle, preset, measuredOmega, cfg)
+        end
         local now = GetGameTimer()
+        local isPitch = preset.axis == 'pitch'
+        local nativeRoll = not isPitch and cfg.StuntRollGovernorEnabled
+        if nativeRoll and preset.nativeFault then
+            finishStunt(vehicle, false, 'angular-velocity native unavailable')
+            return 0.0, 0.0, 0.0
+        end
         local elapsed = clamp((now-preset.lastTick)/1000,0,0.12)
         preset.lastTick = now
-        local omega = worldAngularVelocityInLocal(vehicle)
-        local isPitch = preset.axis == 'pitch'
-        local rate = isPitch and omega.x or omega.y
+        local omega = measuredOmega or worldAngularVelocityInLocal(vehicle)
         local sign = preset.dir * (isPitch and cfg.PitchSign or cfg.RollSign)
-        local signedRate = rate * sign
-        preset.lastRate = signedRate
-        preset.progress = math.max(-15.0, preset.progress + math.deg(signedRate) * elapsed)
+        local rollActuation = nativeRoll and 1.0 or rollCalibration.actuation
         local forward, right, up = GetEntityMatrix(vehicle)
+        local rate = isPitch and omega.x or 0.0
+        local signedRate
+        if isPitch then
+            signedRate = rate * sign
+            preset.progress = math.max(-15.0, preset.progress + math.deg(signedRate) * elapsed)
+        else
+            -- The chassis geometry is independent of Euler angles, which fold
+            -- over at 180 degrees. A roll's relative rotation is the angle
+            -- made by THIS frame's right axis in LAST frame's right/up plane.
+            -- This remains continuous from 0 through 360 even when inverted.
+            local nativeW = GetEntityRotationVelocity(vehicle)
+            local nativeRate = dot(nativeW, forward)
+            -- Use the body-space measurement. The legacy jet controller can
+            -- apply a verified feedback sign, while native rolls use the axes directly.
+            local feedbackSign = nativeRoll and 1.0 or rollCalibration.feedback
+            rate = measuredOmega and (measuredOmega.y * feedbackSign) or nativeRate
+            signedRate = rate * sign
+            local priorRight, priorUp = preset.rollPreviousRight, preset.rollPreviousUp
+            -- Never reuse a stale chassis sample if the current physics tick skipped.
+            preset.geomRate = nil
+            if priorRight and priorUp and elapsed > 0.0001 and elapsed <= 0.12 then
+                local step = math.atan(-dot(right, priorUp), dot(right, priorRight))
+                if math.abs(step) <= math.rad(cfg.StuntRollGeometryMaxStepDegrees) then
+                    local signedStep = step * sign
+                    preset.progress = math.max(-15.0, preset.progress + math.deg(signedStep))
+                    preset.geomRate = signedStep / elapsed
+                else
+                    print(('[rs-thrusters][ROLL TRACK] rejected chassis discontinuity: step=%+.1f degrees'):format(math.deg(step)))
+                end
+            end
+            preset.rollPreviousRight, preset.rollPreviousUp = right, up
+            -- v0.1.59 reported ~3-6 rad/s of ACTUAL chassis motion while the
+            -- stunt speed governor saw only ~1-4 rad/s. The controller therefore
+            -- waited far too long to counter-thrust. Use the same directly
+            -- observed chassis step that drives progress for the rate servo.
+            -- Only accept continuous small-angle frames; do not extrapolate
+            -- missing samples or infer a speed from Euler-angle wrapping.
+            local projectedRate = signedRate
+            if preset.geomRate and math.abs(preset.geomRate) <= cfg.StuntRollGeometrySanityRate then
+                signedRate = preset.geomRate
+                rate = signedRate * sign
+                preset.rollSpeedSource = 'chassis'
+            else
+                preset.rollSpeedSource = 'matrix'
+            end
+            preset.nativeRate = nativeRate * sign
+            preset.matrixRate = measuredOmega and (measuredOmega.y * feedbackSign * sign)
+                or projectedRate
+            preset.crossRate = math.max(math.abs(omega.x), math.abs(omega.z))
+            if preset.crossRate > cfg.StuntRollCrossAbortRate then
+                preset.crossUnsafeSince = preset.crossUnsafeSince or now
+            else
+                preset.crossUnsafeSince = nil
+            end
+            -- Track native/matrix divergence without changing the roll axis sign.
+            if math.abs(preset.matrixRate - preset.nativeRate) > cfg.StuntRollRateDisagreement
+                and now - (preset.lastRateWarning or 0) > 600 then
+                preset.lastRateWarning = now
+                print(('[rs-thrusters][ROLL TRACK] disagreement angle=%.1f upZ=%+.2f native=%+.2f matrix=%+.2f chassis=%+.2f'):format(
+                    preset.progress, up.z, preset.nativeRate, preset.matrixRate, preset.geomRate or 0.0))
+            end
+            local checkpoint = math.floor(preset.progress / 45)
+            if checkpoint > (preset.rollCheckpoint or 0) then
+                preset.rollCheckpoint = checkpoint
+                print(('[rs-thrusters][ROLL TRACK] angle=%.1f upZ=%+.2f native=%+.2f matrix=%+.2f chassis=%+.2f torque=%+.2f'):format(
+                    preset.progress, up.z, preset.nativeRate, preset.matrixRate, preset.geomRate or 0.0, lastRollTorque))
+                print(('[rs-thrusters][ROLL AXES] pitchRate=%+.2f rollRate=%+.2f yawRate=%+.2f forwardZ=%+.2f crossRate=%.2f'):format(
+                    omega.x, omega.y, omega.z, forward.z, preset.crossRate))
+            end
+        end
+        preset.lastRate = signedRate
         local remaining = math.rad(cfg.StuntTargetDegrees - preset.progress)
+        if not isPitch and preset.phase == 'abort_brake' then
+            -- Do not release a car spinning at 4+ rad/s into the general hover
+            -- recovery controller. Brake all three angular axes with small
+            -- bounded forces and hand over only after measured speeds settle.
+            local brakeMix = cfg.StuntRollAbortBrakeMix
+            local pitchBrake = clamp(-omega.x * cfg.StuntRollAbortGain, -brakeMix, brakeMix)
+            local rollBrake = clamp(-omega.y * cfg.StuntRollAbortGain, -brakeMix, brakeMix)
+                * cfg.RollSign * rollActuation
+            local yawBrake = clamp(-omega.z * cfg.StuntRollAbortGain,
+                -cfg.StuntRollYawMix, cfg.StuntRollYawMix)
+            local angular = math.max(math.abs(omega.x), math.abs(omega.y), math.abs(omega.z))
+            if angular < cfg.StuntRollAbortSafeRate then
+                preset.abortStableSince = preset.abortStableSince or now
+            else
+                preset.abortStableSince = nil
+            end
+            if (preset.abortStableSince and now-preset.abortStableSince >= cfg.StuntRollAbortSettleMs)
+                or now-preset.abortSince >= cfg.StuntRollAbortMaxMs then
+                finishStunt(vehicle, false, preset.abortReason ..
+                    (angular >= cfg.StuntRollAbortSafeRate and ' (braking timeout)' or ' (rotation slowed)'))
+                return 0.0, 0.0, 0.0
+            end
+            return pitchBrake * cfg.PitchSign, rollBrake, yawBrake
+        end
         local rotationElapsed = now - preset.started
-
-        if math.abs(rate) >= cfg.StuntSpinAbortRate or preset.progress >= cfg.StuntHardStopDegrees then
+        local invertedArc = not isPitch and (up.z < cfg.StuntRollInvertedUpZ
+            or (preset.progress > 115.0 and preset.progress < 285.0))
+        if not isPitch and signedRate < -cfg.StuntWrongWayRate and rotationElapsed > cfg.StuntWrongWayDelayMs then
+            preset.wrongWaySince = preset.wrongWaySince or now
+            if invertedArc then
+                -- Near upside-down the old controller aborted immediately and
+                -- its general hover recovery accelerated the spin past 6 rad/s.
+                -- Keep the dedicated roll axis in control through this sector.
+                if not preset.invertedAssist and now - preset.wrongWaySince >= cfg.StuntRollInvertedAssistDelayMs then
+                    preset.invertedAssist = true
+                    print(('[rs-thrusters][ROLL TRACK] inverted correction active angle=%.1f upZ=%+.2f native=%+.2f'):format(
+                        preset.progress, up.z, signedRate))
+                end
+            elseif now - preset.wrongWaySince >= cfg.StuntWrongWayDelayMs then
+                rollSafeAbort(preset, 'sustained wrong-way roll away from inversion', now)
+                return 0.0, 0.0, 0.0
+            end
+        else
+            preset.wrongWaySince = nil
+            if not invertedArc then preset.invertedAssist = false end
+        end
+        if not isPitch and (math.abs(rate) >= cfg.StuntRollEmergencyRate
+                or preset.progress >= cfg.StuntHardStopDegrees
+                or (preset.crossUnsafeSince
+                    and now-preset.crossUnsafeSince >= cfg.StuntRollCrossAbortMs)) then
+            print(('[rs-thrusters][STUNT] %s watchdog: angle=%.1f signedRate=%.2f crossRate=%.2f measured=%s pitchTorque=%.2f rollTorque=%.2f'):format(
+                preset.name, preset.progress, signedRate, preset.crossRate or 0.0,
+                tostring(measuredOmega ~= nil), lastPitchTorque, lastRollTorque))
+            rollSafeAbort(preset, 'uncontrolled roll or off-axis rotation', now)
+            return 0.0, 0.0, 0.0 -- brake mode takes over next frame
+        elseif isPitch and (math.abs(rate) >= cfg.StuntSpinAbortRate or preset.progress >= cfg.StuntHardStopDegrees) then
             finishStunt(vehicle, false, 'excess angular velocity / rotation overshoot')
             return 0.0, 0.0, 0.0
         end
         local settleRate = isPitch and cfg.StuntPitchSettleRate or cfg.StuntRollSettleRate
-        local atTarget = math.abs(remaining) <= math.rad(4.0) and math.abs(signedRate) <= settleRate
+        local angleTolerance = nativeRoll and 1.0 or 4.0
+        local rateTolerance = nativeRoll and 0.12 or settleRate
+        local atTarget = math.abs(remaining) <= math.rad(angleTolerance) and math.abs(signedRate) <= rateTolerance
         if not preset.settleUntil and atTarget then
             preset.settleUntil = now + cfg.StuntSettleMs
             preset.phase = 'settle'
             print(('[rs-thrusters][STUNT] %s rotation target reached at %.0f degrees; braking and levelling'):format(
                 preset.name, preset.progress))
         end
-        if not preset.settleUntil and rotationElapsed >= cfg.StuntMaxMs then
-            finishStunt(vehicle, false, 'rotation timeout')
+        if not preset.settleUntil and rotationElapsed >= (isPitch and cfg.StuntMaxMs or cfg.StuntRollMaxMs) then
+            if not isPitch then rollSafeAbort(preset, 'rotation timeout', now)
+            else finishStunt(vehicle, false, 'rotation timeout') end
         elseif not preset.settleUntil and rotationElapsed >= cfg.StuntStallMs
             and preset.progress < cfg.StuntStallDegrees then
-            finishStunt(vehicle, false, 'no rotation detected; verify torque and network ownership')
+            if not isPitch then rollSafeAbort(preset, 'no rotation detected', now)
+            else finishStunt(vehicle, false, 'no rotation detected; verify torque and network ownership') end
         else
+            if nativeRoll and preset.phase == 'rotate' then
+                local cap = math.min(cfg.StuntRollMaxRate, cfg.StuntRollGovernorMaxRoll)
+                local startRate = rotationElapsed * 0.001 * cfg.StuntRollGovernorDeceleration
+                local stoppingRate = math.min(math.sqrt(2.0 * cfg.StuntRollGovernorDeceleration * math.abs(remaining)),
+                    math.abs(remaining) * 3.0)
+                local target = math.min(cap, startRate, stoppingRate)
+                if remaining < 0.0 then target = -target end
+                preset.nativeRollTarget = target * sign
+                local visualMix = clamp((target - signedRate) * cfg.StuntRateGain,
+                    -cfg.StuntRollBrakeMix, cfg.StuntRollDriveMix)
+                return 0.0, visualMix * sign, 0.0
+            end
             -- A trapezoidal rate profile, closing speed reduced by stopping
             -- distance. Brake with reverse jets BEFORE crossing 360 degrees.
             local targetRate
+            local counterThrust = false
             if isPitch then
                 local stoppingRate = math.sqrt(2 * cfg.StuntPitchDeceleration * math.abs(remaining))
                 local startRate = rotationElapsed * 0.001 * cfg.StuntPitchAcceleration
                 targetRate = remaining >= 0 and math.min(cfg.StuntPitchMaxRate, startRate, stoppingRate)
                     or -math.min(settleRate, stoppingRate)
             else
-                -- Start reducing roll speed early, and ease back if it coasts past the target.
+                -- Include response time in the stopping angle so the opposing
+                -- jets start firing before the car reaches one full turn.
+                local forwardRate = math.max(0.0, signedRate)
+                local stoppingAngle = forwardRate^2 / (2 * cfg.StuntRollDeceleration)
+                    + forwardRate * cfg.StuntRollBrakeLead
+                counterThrust = signedRate > settleRate and remaining <= stoppingAngle
                 local approachRate = math.sqrt(2 * cfg.StuntRollDeceleration * math.abs(remaining))
                 targetRate = remaining >= 0 and math.min(cfg.StuntRollMaxRate, approachRate)
-                    or -math.min(cfg.StuntRollSettleRate, approachRate)
+                    or -math.min(settleRate, approachRate)
+                -- Reduce commanded speed BEFORE the inversion, not after the
+                -- car is already above 3 rad/s at 180 degrees. A chassis-rate
+                -- governor starts easing down from ~100 degrees; it keeps the
+                -- rest of the roll slow enough that braking can catch it.
+                if remaining > 0 and preset.progress >= cfg.StuntRollSlowStartDegrees then
+                    local progress = clamp((preset.progress - cfg.StuntRollSlowStartDegrees)
+                        / math.max(cfg.StuntRollSlowFullDegrees - cfg.StuntRollSlowStartDegrees, 1.0), 0.0, 1.0)
+                    local cap = cfg.StuntRollMaxRate
+                        + (cfg.StuntRollSlowRate - cfg.StuntRollMaxRate) * progress
+                    targetRate = math.min(targetRate, cap)
+                end
+                if invertedArc and remaining > 0 then
+                    -- Slow rather than speed up if the chassis starts to pitch
+                    -- or yaw while inverted. A lower rate is more controllable
+                    -- through the 150-230 degree transition.
+                    local crossScale = clamp(1.0 - (preset.crossRate or 0.0)
+                        / cfg.StuntRollCrossSoftRate, 0.45, 1.0)
+                    targetRate = math.min(targetRate, cfg.StuntRollInvertedMaxRate) * crossScale
+                    if signedRate < cfg.StuntRollInvertedMinRate and (preset.crossRate or 0.0) < 0.18
+                        and math.abs(remaining) > math.rad(25.0) then
+                        targetRate = math.max(targetRate, cfg.StuntRollInvertedMinRate)
+                    end
+                end
             end
             local yawBrake = clamp(-softZero(omega.z, 0.04) * 0.65, -cfg.HoverYawMix, cfg.HoverYawMix)
             if preset.settleUntil then
@@ -1401,22 +1967,68 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput)
                 else
                     local limit = isPitch and cfg.StuntPitchSettleMix or cfg.StuntSettleMix
                     return levelMix(levelPitch,omega.x,limit,cfg)*cfg.PitchSign,
-                        levelMix(levelRoll,omega.y,limit,cfg)*cfg.RollSign, yawBrake
+                        levelMix(levelRoll,isPitch and omega.y or rate,limit,cfg)*cfg.RollSign
+                            * (isPitch and 1 or rollActuation), yawBrake
                 end
             else
-                local driveMix = isPitch and cfg.StuntPitchDriveMix or cfg.StuntMix
-                local brakeMix = isPitch and cfg.StuntPitchBrakeMix or cfg.StuntBrakeMix
-                local correction = clamp((targetRate - signedRate) * cfg.StuntRateGain,
-                    -brakeMix, driveMix) * sign
+                local driveMix = isPitch and cfg.StuntPitchDriveMix or cfg.StuntRollDriveMix
+                local brakeMix = isPitch and cfg.StuntPitchBrakeMix or cfg.StuntRollBrakeMix
+                if not isPitch and invertedArc and remaining > 0 and signedRate < cfg.StuntRollInvertedMinRate then
+                    driveMix = math.max(driveMix, cfg.StuntRollInvertedDriveMix)
+                end
+                local correction = clamp((targetRate - signedRate) * cfg.StuntRateGain, -brakeMix, driveMix)
+                -- This soft speed limiter is independent of the 360-degree
+                -- stopping-distance calculation. At inversion the force/vehicle
+                -- dynamics can overpower the normal brake; intervene before
+                -- excessive kinetic energy builds up.
+                local overSpeed = not isPitch and signedRate > cfg.StuntRollSoftBrakeRate
+                if overSpeed then
+                    correction = -math.min(brakeMix,
+                        (signedRate - cfg.StuntRollSlowRate) * cfg.StuntRateGain)
+                    counterThrust = true
+                elseif counterThrust then
+                    correction = -math.min(brakeMix, signedRate * cfg.StuntRateGain)
+                end
+                if not isPitch and counterThrust and signedRate > 0 then
+                    if not preset.brakeStartedAt then
+                        preset.brakeStartedAt, preset.brakeStartRate = now, signedRate
+                    elseif now - preset.brakeStartedAt >= cfg.StuntRollBrakeResponseMs
+                        and signedRate >= preset.brakeStartRate + cfg.StuntRollBrakeRiseLimit then
+                        print(('[rs-thrusters][ROLL SAFETY] reverse thrust did not arrest spin: angle=%.1f first=%.2f now=%.2f source=%s'):format(
+                            preset.progress, preset.brakeStartRate, signedRate,
+                            preset.rollSpeedSource or 'unknown'))
+                        rollSafeAbort(preset, 'opposing jets ineffective during rotation', now)
+                        return 0.0, 0.0, 0.0
+                    end
+                else
+                    preset.brakeStartedAt, preset.brakeStartRate = nil, nil
+                end
+                correction = correction * sign * (isPitch and 1 or rollActuation)
+                if not isPitch and counterThrust ~= preset.counterThrust then
+                    if counterThrust then
+                        print(('[rs-thrusters][STUNT] %s counter-thrust at %.1f degrees, actualRate=%.2f target=%.2f source=%s'):format(
+                            preset.name, preset.progress, signedRate, targetRate,
+                            preset.rollSpeedSource or 'unknown'))
+                    end
+                    preset.counterThrust = counterThrust
+                end
                 if now - preset.lastLog >= 1000 then
                     preset.lastLog = now
-                    print(('[rs-thrusters][STUNT] %s angle=%.0f/%d rate=%.2f target=%.2f output=%.2f'):format(
-                        preset.name,preset.progress,cfg.StuntTargetDegrees,signedRate,targetRate,correction))
+                    print(('[rs-thrusters][STUNT] %s angle=%.0f/%d rate=%.2f target=%.2f output=%.2f source=%s'):format(
+                        preset.name,preset.progress,cfg.StuntTargetDegrees,signedRate,targetRate,correction,
+                        isPitch and 'pitch' or (preset.rollSpeedSource or 'unknown')))
                 end
-                local crossRate = isPitch and omega.y or omega.x
-                local crossBrake = clamp(-softZero(crossRate, 0.04) * 0.45, -cfg.StuntCrossMix, cfg.StuntCrossMix)
-                if isPitch then return correction, crossBrake * cfg.RollSign, yawBrake end
-                return crossBrake * cfg.PitchSign, correction, yawBrake
+                if not isPitch then
+                    -- Previously both non-roll axes were left completely free.
+                    -- GTA can introduce a rapid cross-axis tumble when the car
+                    -- is upside down, corrupting the roll-angle measurement.
+                    -- Dampen those axes throughout the stunt; only roll is free.
+                    local crossPitch, crossYaw = rollCrossAxisDamping(omega, forward,
+                        preset.startForwardZ or 0.0, cfg)
+                    return crossPitch, correction, crossYaw
+                end
+                local crossBrake = clamp(-softZero(omega.y, 0.04) * 0.45, -cfg.StuntCrossMix, cfg.StuntCrossMix)
+                return correction, crossBrake * cfg.RollSign, yawBrake
             end
         end
     end
@@ -1518,6 +2130,7 @@ CreateThread(function()
                 end
                 local forward, right, up = GetEntityMatrix(veh)
                 local measuredOmega = chassisAngularVelocity(veh, forward, right, up, GetGameTimer())
+                if rollProbe then updateRollProbe(veh, forward, right, up, measuredOmega, GetGameTimer()) end
                 local fwd = GetEntityForwardVector(veh)
                 local forwardSpeed = v.x*fwd.x + v.y*fwd.y + v.z*fwd.z
                 local factor = math.sqrt(clamp(pressure(veh)/Config.MaxPressure,0,1))
@@ -1548,26 +2161,32 @@ CreateThread(function()
                 local throttle, turn, slide, pitchInput = 0.0, 0.0, 0.0, 0.0
                 local controlsAvailable = not IsPauseMenuActive()
                 local horizontalSpeed = math.sqrt(v.x * v.x + v.y * v.y)
-                local jumpAirborne = mode == 'assisted' and not preset and not grounded
+                local jumpAirborne = mode == 'assisted' and not preset and not rollProbe and not grounded
                     and (airborne or inAir)
-                if hover and mode == 'assisted' and not grounded then
-                    -- The combined axes are consumed by hoverInputs. Suppress
-                    -- GTA's separate directional air controls too.
+                if preset or rollProbe then
+                    -- GTA has built-in midair steering/roll and handbrake+steer
+                    -- yaw. Prevent a *second* physics controller from fighting
+                    -- the thruster stunt. The player's normal driving and
+                    -- assisted hover input processing remain unchanged.
+                    for control = 59, 64 do DisableControlAction(0, control, true) end
+                    DisableControlAction(0, 76, true)
+                elseif hover and mode == 'assisted' and not grounded then
+                    -- Hover handles these flight axes itself; do not double-drive.
                     for control = 61, 64 do DisableControlAction(0, control, true) end
-                elseif not hover and jumpAirborne and controlsAvailable and not input.mod and not input.stuntKey then
+                elseif not hover and jumpAirborne and controlsAvailable and not input.mod and not input.padStunt and not input.stuntKey then
                     -- Retain GTA's own midair steering, with lower keyboard and stick authority.
                     for control = 59, 64 do
                         local value = GetControlNormal(0, control)
                         if value ~= 0.0 then SetControlNormal(0, control, value * cfg.JumpInputScale) end
                     end
                 end
-                local jumpTrim = not hover and jumpAirborne and not input.mod and not input.stuntKey
+                local jumpTrim = not hover and jumpAirborne and not input.mod and not input.padStunt and not input.stuntKey
                 local jumpLanding = not hover and jumpAirborne and landingAssist
                     and h < cfg.LandingHeight and v.z < cfg.LandingFlareMaxDescent
                 local jumpLiftDemand
                 if controlsAvailable then throttle, turn, slide, pitchInput = hoverInputs(cfg, hover) end
                 lastPilot.throttle, lastPilot.turn, lastPilot.slide, lastPilot.pitch = throttle, turn, slide, pitchInput or 0.0
-                local driveHeading
+                local driveHeading, nativeRates
                 local verticalLift = false
                 local helicopter = hover and hoverStyle == 'helicopter'
                 -- In Helicopter hover B descends; LB+B requests air braking.
@@ -1666,6 +2285,10 @@ CreateThread(function()
                         print(('[rs-thrusters][COLLISION] flight upset; rate=%.2f tiltUp=%.2f height=%.2f vz=%.2f contact=%s obstacle=%s; thrust limiting'):format(
                             angularShock, up.z, h, v.z, tostring(freshContact), tostring(obstacle)))
                     end
+                end
+                if obstacle and rollProbe then
+                    print('[rs-thrusters][ROLL PROBE] canceled: obstacle ahead')
+                    rollProbe = nil
                 end
                 if obstacle and preset then
                     finishStunt(veh, false, 'obstacle ahead during stunt')
@@ -1785,6 +2408,16 @@ CreateThread(function()
                             preset.targetZ = pos.z
                             preset.phase = 'rotate'
                             preset.stableSince = nil
+                            if preset.axis == 'roll' then
+                                -- Initialize a chassis-motion angle accumulator at the
+                                -- actual rotation start, NOT at the climb command.
+                                preset.rollPreviousRight, preset.rollPreviousUp = right, up
+                                preset.geomRate, preset.nativeRate, preset.matrixRate = 0.0, 0.0, 0.0
+                                preset.wrongWaySince, preset.invertedAssist = nil, false
+                                preset.rollCheckpoint = 0
+                                preset.startForwardZ = forward.z
+                                preset.crossUnsafeSince = nil
+                            end
                             notice(('%s: rotating.'):format(preset.name))
                             print(('[rs-thrusters][STUNT] %s ROTATE at AGL %.2f rate=%.2f'):format(preset.name,h,fullRate))
                         end
@@ -1806,8 +2439,9 @@ CreateThread(function()
                     local lift = math.min(0.90, hoverCollectiveDemand(targetVz, h, v.z, grounded, factor, dt, cfg))
                     local omega = worldAngularVelocityInLocal(veh)
                     if not grounded then
-                        local pitch, roll = assistedRecoveryMix(forward, right, up, omega, 0.0,
+                        local pitch, roll, pitchRate, rollRate = assistedRecoveryMix(forward, right, up, omega, 0.0,
                             fullRate > cfg.HoverRecoveryBrakeExit, cfg.StuntClimbLevelMix, cfg)
+                        nativeRates = vector3(pitchRate, rollRate, 0.0)
                         mixAssistedHover(levels, lift, pitch, roll)
                         jumpLiftDemand = lift
                         local yaw = clamp(-omega.z * cfg.HoverRecoveryRateGain, -cfg.HoverYawMix, cfg.HoverYawMix)
@@ -1832,8 +2466,10 @@ CreateThread(function()
                     if assistedRecovery then
                         local limit = assistedSpinBraking and cfg.HoverRecoveryBrakeMix or cfg.HoverRecoveryMix
                         if obstacle then limit = math.min(limit, cfg.CollisionRecoveryMix) end
-                        local pitch, roll = assistedRecoveryMix(forward, right, up, omega, catchingHover and 0.0 or recoverySteer,
+                        local pitch, roll, pitchRate, rollRate = assistedRecoveryMix(forward, right, up, omega,
+                            catchingHover and 0.0 or recoverySteer,
                             assistedSpinBraking, limit, cfg)
+                        nativeRates = vector3(pitchRate, rollRate, 0.0)
                         mixAssistedHover(levels, lift, pitch, roll)
                         jumpLiftDemand = lift
                     elseif recoverySteer ~= 0 then
@@ -1923,13 +2559,15 @@ CreateThread(function()
                     end
                     local pitch, roll, yaw = 0.0, 0.0, 0.0
                     if assistedHover and jumpAirborne then
-                        local authority
-                        pitch, roll, authority = assistedHoverAttitude(forward, right, up, omegaForGuard,
+                        local authority, pitchRate, rollRate
+                        pitch, roll, authority, pitchRate, rollRate = assistedHoverAttitude(forward, right, up, omegaForGuard,
                             pitchInput or 0.0, horizontalSpeed, cfg)
-                        yaw = clamp(softZero(-turn * cfg.HoverYawRate * authority - omegaForGuard.z, 0.04) * 0.65,
+                        local yawRate = -turn * cfg.HoverYawRate * authority
+                        yaw = clamp(softZero(yawRate - omegaForGuard.z, 0.04) * 0.65,
                             -cfg.HoverYawMix, cfg.HoverYawMix)
-                    elseif hover or preset or mode ~= 'assisted' then
-                        pitch, roll, yaw = desiredRotation(veh, airborne, hoverHold, turn, pitchInput or 0.0)
+                        nativeRates = vector3(pitchRate, rollRate, yawRate)
+                    elseif hover or preset or rollProbe or mode ~= 'assisted' then
+                        pitch, roll, yaw = desiredRotation(veh, airborne, hoverHold, turn, pitchInput or 0.0, measuredOmega)
                     elseif jumpLanding then
                         local limit = cfg.JumpLandingMix
                         local blend = clamp((cfg.LandingHeight - h) / cfg.LandingHeight, 0.0, 1.0)
@@ -1983,6 +2621,7 @@ CreateThread(function()
                     if not hover and not input.lift then lift = jumpLiftDemand or 0.0 end
                     jumpLiftDemand = math.min(lift, cfg.CollisionLiftThrottle)
                     mixBelly(levels, jumpLiftDemand, pitch, roll, false)
+                    nativeRates = vector3(0.0, 0.0, 0.0)
                 end
                 if not driveHeading then hoverDrive, hoverSlide = 0.0, 0.0 end
                 local recoveryGain = hoverRecovering and cfg.HoverRecoveryTorqueGain or 1.0
@@ -1994,19 +2633,37 @@ CreateThread(function()
                     recoveryGain = math.min(recoveryGain, cfg.CollisionTorqueGain)
                 end
                 local stuntGain = recoveryGain
+                local nativeAttitude = preset ~= nil and preset.axis == 'roll'
+                    and not preset.climbing and cfg.StuntRollGovernorEnabled
                 if preset and not preset.climbing then
                     if preset.axis == 'pitch' then
                         stuntGain = preset.settleUntil and 1.0 or cfg.StuntPitchTorqueGain
+                        if cfg.StuntPitchNativeEnabled then stuntGain = 0.0 end
                     else
                         stuntGain = preset.settleUntil and cfg.StuntSettleTorqueGain or cfg.StuntTorqueGain
+                        if nativeAttitude then stuntGain = 0.0 end
                     end
                 end
+                if nativeRates and (not preset or preset.climbing) and not rollProbe and not grounded
+                    and h >= cfg.HoverLaunchClearance then
+                    local response = (assistedSpinBraking or impactBraking)
+                        and cfg.HoverNativeBrakeResponse or cfg.HoverNativeResponse
+                    local rate = omegaForGuard + (nativeRates - omegaForGuard) * (1.0 - math.exp(-dt * response))
+                    nativeAttitude = writeChassisRates(veh, forward, right, up, rate.x, rate.y, rate.z)
+                    if nativeAttitude then stuntGain = 0.0 end
+                end
+                lastPilot.nativeAttitude = nativeAttitude
                 local priorPitchTorque, priorRollTorque = lastPitchTorque, lastRollTorque
                 local priorRate = previousFlightRate or omegaForGuard
                 previousFlightRate = omegaForGuard
                 local mask = applyNozzles(veh, levels, factor, driveHeading,
                     hover or jumpTrim or jumpLanding or impactBraking or preset ~= nil or verticalLift,
-                    verticalLift or jumpLanding or impactBraking, stuntGain, jumpLiftDemand)
+                    verticalLift or jumpLanding or impactBraking, stuntGain, jumpLiftDemand, nativeAttitude)
+                -- Apply the assisted roll safety envelope AFTER the nozzle forces,
+                -- so an unstable force response cannot accumulate across ticks.
+                if preset and preset.axis == 'roll' and not preset.climbing then
+                    stuntRollAngularGovernor(veh, forward, right, up, now, cfg)
+                end
                 local liftPressed = input.lift and not wasLifting
                 local hoverEngaged = hover and not wasHovering and not preset
                 local pitching = math.abs(controllerPitch) > 0.025
@@ -2119,7 +2776,7 @@ local function setEffects(vehicle, mask, intensity, ownVehicle, hoverExhaust, ju
         if liftJet and not entry.refreshAt[nozzle.name] then
             entry.refreshAt[nozzle.name] = now + Config.Fx.HoverSteamRefreshMs + (bellyIndex - 1) * 210
         end
-        -- Refresh the two layers together while staggering different nozzles.
+        -- Refresh the layers together while staggering different nozzles.
         local refresh = liftJet and now >= entry.refreshAt[nozzle.name]
         for index, layer in ipairs(Config.Fx.Layers) do
             local key = nozzle.name .. ':' .. index

@@ -1,5 +1,10 @@
 Config = {}
-Config.Version = '0.1.53'
+Config.Version = '0.1.69'
+
+-- Saved signs for the optional jet-torque roll mode. Native rolls skip these.
+Config.VerifiedRollSigns = {
+    [67753863] = '1:1', -- Yosemite Rancher, v0.1.63 live test
+}
 
 function Config.PropulsionKind(kind)
     if kind == 'left' or kind == 'right' then return 'side' end
@@ -82,7 +87,10 @@ Config.Physics = {
     CollisionSpinBrakeMix = 0.30,
     CollisionRecoveryMix = 0.09,
     CollisionLiftThrottle = 0.48,
-    HoverMoveSpeed = 8.0, -- m/s at full forward throttle
+    HoverMoveSpeed = 8.0, -- m/s at full forward throttle in full control
+    AssistedHoverMoveSpeed = 14.0, -- m/s at full forward throttle in assisted hover
+    HoverNativeResponse = 8.0, -- 1/s; smooth native pitch, roll and yaw commands
+    HoverNativeBrakeResponse = 12.0, -- 1/s; brake a spin before commanding level
     HoverReverseSpeed = 4.0,
     HoverDriveGain = 1.10,
     HoverPositionGain = 0.55, -- return speed per meter of drift
@@ -138,41 +146,107 @@ Config.Physics = {
     ControllerDeadzone = 0.22,
     ManualMix = 0.72,
     YawMix = 0.75,
-    StuntNeutralThreshold = 0.26, -- LB must see neutral before the flick
+    StuntNeutralThreshold = 0.26, -- RB must see neutral before the flick
     StuntFlickThreshold = 0.72,
     StuntSpinAbortRate = 4.2, -- rad/s safety watchdog
+    StuntWrongWayRate = 0.60, -- sustained wrong-way motion is evaluated independently of the inverted transition
+    StuntWrongWayDelayMs = 450,
+    StuntRollGeometryMaxStepDegrees = 18.0, -- discard discontinuous chassis transforms, not real roll motion
+    StuntRollGeometrySanityRate = 10.0, -- reject implausible chassis-rate sample before using it for control
+    StuntRollEmergencyRate = 2.60, -- physical chassis rad/s, abort and brake before runaway
+    StuntRollSoftBrakeRate = 1.10, -- begin proactive counter-thrust when chassis spins faster than this
+    StuntRollBrakeResponseMs = 380, -- check whether reverse thrust actually reduces rotation
+    StuntRollBrakeRiseLimit = 0.55, -- max allowed speed increase during a sustained brake interval
+    StuntRollSlowStartDegrees = 95.0, -- begin slowing before the inverted transition
+    StuntRollSlowFullDegrees = 150.0,
+    StuntRollSlowRate = 0.48, -- maximum requested rate across the inverted sector
+    StuntRollRateDisagreement = 0.45, -- native-vs-matrix warning threshold in radians/second
+    -- Cross-axis control during a commanded 360 roll. Only active in roll stunts.
+    StuntRollCrossMix = 0.13, -- pitch correction authority; hover unaffected
+    StuntRollYawMix = 0.12, -- yaw correction authority
+    StuntRollPitchHoldGain = 0.32, -- hold initial nose height
+    StuntRollCrossPitchGain = 0.26, -- body pitch angular damping
+    StuntRollCrossYawGain = 0.24, -- body yaw angular damping
+    StuntRollCrossSoftRate = 0.85, -- reduce requested roll rate if cross-axis tumble begins
+    StuntRollCrossAbortRate = 2.0, -- unsafe pitch/yaw, radians per second
+    StuntRollCrossAbortMs = 450, -- persistent off-axis spin before dedicated braking
+    StuntRollInvertedMaxRate = 0.55, -- gentler 150-230 degree transition
+    StuntRollAbortBrakeMix = 0.26, -- dedicated three-axis safety brake
+    StuntRollAbortGain = 0.28,
+    StuntRollAbortSafeRate = 0.38,
+    StuntRollAbortSettleMs = 300,
+    StuntRollAbortMaxMs = 5000,
+    -- Stunt-only safety governor. Normal hover stays entirely force-controlled.
+    -- This does not rotate or teleport the car: only dangerous angular velocity
+    -- is capped when GTA physics overwhelms the nozzle counter-thrust.
+    StuntRollGovernorEnabled = true,
+    StuntRollGovernorMaxPitch = 0.42, -- prevent yaw/pitch tumble during a roll
+    StuntRollGovernorMaxYaw = 0.40,
+    StuntRollGovernorMaxRoll = 1.75, -- rad/s; cap for the faster native roll
+    StuntRollGovernorSlowStart = 235.0, -- cap stopping speed as 360 approaches
+    StuntRollGovernorDeceleration = 2.40,
+    StuntRollGovernorFinalFloor = 0.12,
+    StuntRollGovernorSettleRoll = 0.18,
+    StuntRollAbortAngularCap = 0.28,
+    StuntRollAbortAngularDamping = 12.0,
+    StuntRollGovernorLogMs = 750,
+    StuntRollInvertedUpZ = -0.40, -- body-up vector enters the upside-down transition
+    StuntRollInvertedMinRate = 0.28, -- modest minimum target while escaping inversion
+    StuntRollInvertedDriveMix = 0.10, -- stunt-only extra authority (normal hover unchanged)
+    StuntRollInvertedAssistDelayMs = 420, -- short reversal grace period before extra correction
+    -- Two verified, independent small roll probes required before a 360.
+    RollProbeMinHeight = 7.0,
+    RollProbeMinUpZ = 0.975,
+    RollProbeStartMaxRate = 0.15,
+    RollProbeMix = 0.065, -- very small differential jet input
+    RollProbePulseMs = 180,
+    RollProbeMaxRate = 0.65,
+    RollProbeMaxDegrees = 8.0,
+    RollProbeMinDegrees = 0.15,
+    RollProbeMinImpulse = 0.012,
+    RollProbeBrakeMix = 0.13,
+    RollProbeBrakeGain = 0.50,
+    RollProbeLevelGain = 1.5,
+    RollProbeBrakeMaxRate = 0.20,
+    RollProbeStopRate = 0.08,
+    RollProbeStopMs = 250,
+    RollProbeBrakeMs = 2200,
+    RollProbeEmergencyRate = 1.15,
     StuntHardStopDegrees = 425.0, -- don't attempt a second revolution
     StuntClearance = 7.0, -- lift clearance before a full 360 (open sky, no ceiling probe)
     StuntAutoTakeoff = true, -- a J/K/Alt+arrow stunt launches and returns to hover even if H was off
     StuntClimbSpeed = 5.5,
     StuntClimbTimeoutMs = 11000,
     StuntClimbLevelMix = 0.18,
-    StuntMix = 0.94, -- maximum attitude jet asymmetry while rotating
-    StuntBrakeMix = 0.90, -- reverse-thrust authority to stop at one full rotation
+    StuntRollDriveMix = 0.09, -- initial safe rotation output; calibrate before increasing
+    StuntRollBrakeMix = 0.42,
+    StuntRollBrakeLead = 0.24, -- seconds to allow for rotation feedback and jet response
     StuntSettleMix = 0.37, -- finish levelling and arrest angular velocity
-    StuntTorqueGain = 3.1, -- stunt-only torque multiplier; hover stays exactly as before
-    StuntPitchMaxRate = 1.15, -- rad/s; front/back flips only
-    StuntPitchAcceleration = 1.0, -- rad/s^2; ease into the flip from rest
-    StuntPitchDeceleration = 0.65, -- rad/s^2; plan braking early
+    StuntTorqueGain = 0.70, -- stunt-only, reduced from v0.1.55 pending measured live gain
+    StuntPitchNativeEnabled = true,
+    StuntPitchMaxRate = 2.50, -- rad/s; front/back flips only
+    StuntPitchAcceleration = 3.00, -- rad/s^2; ease into the flip from rest
+    StuntPitchDeceleration = 2.20, -- rad/s^2; plan braking early
     StuntPitchDriveMix = 0.36,
     StuntPitchBrakeMix = 0.44,
     StuntPitchTorqueGain = 1.2,
     StuntPitchSettleMix = 0.16,
     StuntPitchSettleRate = 0.30,
     StuntRateGain = 1.35,
-    StuntRollMaxRate = 1.85, -- rad/s
-    StuntRollDeceleration = 1.0, -- rad/s^2; start braking before the end of the roll
+    StuntRollMaxRate = 1.75, -- rad/s; faster native roll within the existing governor cap
+    StuntRollDeceleration = 0.65, -- brake earlier while testing native response -- rad/s^2; start braking before the end of the roll
     StuntRollSettleRate = 0.40, -- rad/s; maximum spin at the start and finish
     StuntStallMs = 5000, -- surface a warning if the car fails to rotate
     StuntStallDegrees = 12.0,
     StuntSettleMs = 3500,
     StuntStableMs = 150,
-    StuntCrossMix = 0.14, -- suppress rotation on the uncommanded axis
+    StuntCrossMix = 0.14, -- suppress roll during a pitch stunt
     StuntSettleTorqueGain = 1.4, -- lower than the rotating phase to limit overshoot
     StabilizeKp = 0.35,
     StabilizeKd = 0.50,
     StabilizeMix = {assisted = 0.60, sport = 0.30, manual = 0.0},
-    StuntMaxMs = 14000,
+    StuntMaxMs = 14000, -- pitch stunt time limit (unchanged)
+    StuntRollMaxMs = 24000, -- slower conservative 360 roll has its own time limit
     StuntTargetDegrees = 360.0,
     -- Reverse signs here if a test car rotates opposite its control label.
     PitchSign = 1.0,
@@ -192,7 +266,7 @@ Config.UI = {
 }
 
 Config.FlightCamera = {
-    EnabledByDefault = true,
+    EnabledByDefault = false,
     Distance = 9.0,
     Height = 2.6,
     LookAhead = 3.5,
@@ -207,10 +281,11 @@ Config.Fx = {
     Asset = 'core',
     Name = 'ent_sht_steam', -- verified built-in vapor purge effect
     Scale = 1.10,
-    -- Scale each layer against the jet output. The second layer starts downstream.
+    -- Start with a narrow jet, then build up a wide cloud downstream.
     Layers = {
         {Distance = 0.0, Scale = 0.44, Alpha = 1.0, Fade = 0.75},
-        {Distance = 0.90, Scale = 1.38, Alpha = 0.88, Fade = 1.45},
+        {Distance = 0.28, Scale = 1.18, Alpha = 0.78, Fade = 0.85},
+        {Distance = 1.55, Scale = 1.75, Alpha = 0.90, Fade = 1.75},
     },
     FadeMs = 1100, -- each jet tapers off after the thrust stops
     -- Visual placement only. Pull side exhaust inside the wheel-width bounds.

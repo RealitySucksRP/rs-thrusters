@@ -1,0 +1,4 @@
+# Runtime installation records and local backups stay on the server.
+data/installs.json
+*.bak
+*.log

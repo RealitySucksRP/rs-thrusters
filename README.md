@@ -1,5 +1,11 @@
 # RS Thrusters
 
+**Current source: v0.1.69** · Native barrel rolls start directly from your stunt input. Front/back flips and left/right rolls have faster rotation and controlled braking.
+
+Install the resource at `resources/[rs-resources]/rs-thrusters` and add `ensure rs-thrusters` to `server.cfg`.
+
+[Install guide and controls](PACKAGE-README.md) · [Changelog](CHANGELOG.md)
+
 <img width="800" height="450" alt="Hero main" src="https://github.com/user-attachments/assets/1ac167e4-bdaa-434d-b1a4-6bbe09112ac0" />
 <img width="1635" height="922" alt="hoover3" src="https://github.com/user-attachments/assets/e722ed77-4c47-47dc-bceb-46ceba453da1" />
 <img width="1637" height="915" alt="Hoover2" src="https://github.com/user-attachments/assets/5ad5b5a0-e627-4daf-85ae-df15835d294d" />
@@ -13,6 +19,6 @@
 
 Configurable directional thrusters for FiveM cars, with hover and flight assistance, aerial stunts, synchronized exhaust, and keyboard or controller input.
 
-[Download ZIP](https://github.com/RealitySucksRP/rs-thrusters/releases/latest/download/rs-thrusters.zip) · [GitHub](https://github.com/RealitySucksRP/rs-thrusters) · [Website](https://realitysucksrp.github.io/) · [Store](https://reality-sucks-rp-webstore.tebex.io/) · [Discord](https://discord.gg/e9V3rPHySx) · [YouTube](https://www.youtube.com/@RealitySucksRP) · [Free scripts](https://reality-sucks-rp-webstore.tebex.io/category/free-scripts)
+[Download current source ZIP](https://github.com/RealitySucksRP/rs-thrusters/archive/refs/heads/main.zip) · [GitHub](https://github.com/RealitySucksRP/rs-thrusters) · [Website](https://realitysucksrp.github.io/) · [Store](https://reality-sucks-rp-webstore.tebex.io/) · [Discord](https://discord.gg/e9V3rPHySx) · [YouTube](https://www.youtube.com/@RealitySucksRP) · [Free scripts](https://reality-sucks-rp-webstore.tebex.io/category/free-scripts)
 
-[Package documentation](PACKAGE-README.md)
+[Previous packaged release](https://github.com/RealitySucksRP/rs-thrusters/releases/tag/free-source-2026-11-06)
