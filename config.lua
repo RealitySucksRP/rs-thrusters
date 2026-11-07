@@ -1,5 +1,11 @@
 Config = {}
-Config.Version = '0.1.69'
+Config.Version = '0.1.72'
+
+-- Default roll keys. Players can override them in Settings > Key Bindings > FiveM.
+Config.Keybinds = {
+    RollRight = 'K',
+    RollLeft = 'L',
+}
 
 -- Saved signs for the optional jet-torque roll mode. Native rolls skip these.
 Config.VerifiedRollSigns = {
@@ -310,7 +316,7 @@ Config.Fx = {
     }
 }
 
-Config.Debug = false
+Config.Debug = false -- Set true to show verbose flight and stunt logs in F8.
 
 -- GTA vehicle classes, client enforcement plus server-side automobile type check.
 Config.AllowedClasses = {

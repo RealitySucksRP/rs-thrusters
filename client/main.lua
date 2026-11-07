@@ -67,17 +67,17 @@ local chase
 local chaseAirborneSince, chaseLandedSince
 local chaseYielded = false
 
+local function debugLog(message)
+    if Config.Debug then print(message) end
+end
+
 local function notice(message)
-    print('[rs-thrusters] ' .. message)
+    debugLog('[rs-thrusters] ' .. message)
     BeginTextCommandThefeedPost('STRING')
     AddTextComponentSubstringPlayerName('~b~RS Thrusters~s~: ' .. message)
     EndTextCommandThefeedPostTicker(false, false)
 end
 RegisterNetEvent('rs_thrusters:notice', notice)
-
-local function debugLog(message)
-    if Config.Debug then print('[rs-thrusters] ' .. message) end
-end
 
 local function isEligible(vehicle)
     return vehicle ~= 0 and DoesEntityExist(vehicle) and GetEntityType(vehicle) == 2
@@ -438,9 +438,7 @@ local function queueStunt(axis, dir)
     preset = {axis=axis, dir=dir, name=name, progress=0.0, started=now, lastTick=now,
         queued=now, climbing=phase ~= 'rotate', phase=phase,
         targetZ=pos.z, wasHovering=wasHovering, lastRate=0.0, lastLog=0}
-    if phase == 'climb' then notice(('%s: lifting to %.0f m clearance.'):format(name, clearance))
-    else notice(('%s: steadying before rotation.'):format(name)) end
-    print(('[rs-thrusters][STUNT] queued %s at AGL %.2fm, hover=%s'):format(name,height,tostring(wasHovering)))
+    debugLog(('[rs-thrusters][STUNT] queued %s at AGL %.2fm, hover=%s'):format(name,height,tostring(wasHovering)))
 end
 
 local function onLift(pressed) input.lift = pressed end
@@ -601,17 +599,14 @@ RegisterCommand('rstflip', function()
     queueStunt('pitch', -1)
 end, false)
 RegisterCommand('rstbackflip', function() queueStunt('pitch', 1) end, false)
-RegisterCommand('rstroll', function()
-    recordKey('K')
-    queueStunt('roll', 1)
-end, false)
-RegisterCommand('rstrollleft', function()
-    recordKey('L')
-    queueStunt('roll', -1)
-end, false)
-RegisterKeyMapping('rstrollleft', 'RS Thrusters - Assisted left barrel roll', 'keyboard', 'L')
+RegisterCommand('rstroll', function() queueStunt('roll', 1) end, false)
+RegisterCommand('rstrollleft', function() queueStunt('roll', -1) end, false)
+do
+    local rollKeys = Config.Keybinds or {}
+    RegisterKeyMapping('rstroll', 'RS Thrusters - Assisted right barrel roll', 'keyboard', rollKeys.RollRight or 'K')
+    RegisterKeyMapping('rstrollleft', 'RS Thrusters - Assisted left barrel roll', 'keyboard', rollKeys.RollLeft or 'L')
+end
 RegisterKeyMapping('rstflip', 'RS Thrusters - Assisted front flip', 'keyboard', 'J')
-RegisterKeyMapping('rstroll', 'RS Thrusters - Assisted barrel roll', 'keyboard', 'K')
 
 -- NUI focus is granted ONLY for the optional settings panel, never for the flight HUD.
 local function closePanel()
@@ -862,7 +857,7 @@ RegisterCommand('rstdiag', function()
         tostring(hoverRecovering), tostring(lastContact), tostring(assistedSpinBraking), tostring(catchingHover),
         tostring(lastPilot.nativeAttitude == true)))
     local keys = {}
-    for _, key in ipairs({'W','A','S','D','UP','DOWN','LEFT','RIGHT','LMENU','J','K','L','NUMPAD8','NUMPAD2','NUMPAD4','NUMPAD6'}) do
+    for _, key in ipairs({'W','A','S','D','UP','DOWN','LEFT','RIGHT','LMENU','J','NUMPAD8','NUMPAD2','NUMPAD4','NUMPAD6'}) do
         keys[#keys+1] = ('%s=%d'):format(key, keyPresses[key] or 0)
     end
     print('[rs-thrusters][KEY PRESSES] ' .. table.concat(keys, ' '))
@@ -1466,13 +1461,13 @@ local function finishStunt(vehicle, successful, reason)
     -- a 14-second unresponsive stunt state.
     hoverRecovering = not successful
     recoveryAxis, recoverySign = nil, nil
-    if successful then
-        notice(('%s completed: %.0f degrees, hover holding at %.1f m.'):format(name, progress, hoverHeight))
-    else
+    if not successful then
         notice(('%s incomplete (%.0f degrees): %s. Recovering in hover.'):format(name,progress,reason or 'stopped'))
     end
-    print(('[rs-thrusters][STUNT] %s %s progress=%.1f AGL=%.2f reason=%s'):format(
-        name, successful and 'DONE' or 'FAILED', progress, position.z-floor, reason or 'ok'))
+    if Config.Debug or not successful then
+        print(('[rs-thrusters][STUNT] %s %s progress=%.1f AGL=%.2f reason=%s'):format(
+            name, successful and 'DONE' or 'FAILED', progress, position.z-floor, reason or 'ok'))
+    end
 end
 
 local function emergencyRecover()
@@ -1598,7 +1593,7 @@ local function nativePitchStunt(vehicle, p, measuredOmega, cfg)
         finishStunt(vehicle, false, 'angular-velocity native unavailable')
         return 0.0, 0.0, 0.0
     end
-    if now - p.lastLog >= 750 then
+    if Config.Debug and now - p.lastLog >= 750 then
         p.lastLog = now
         print(('[rs-thrusters][PITCH NATIVE] %s %s angle=%.1f pitch=%+.2f target=%+.2f roll=%+.2f yaw=%+.2f'):format(
             p.name, p.phase, p.progress, pitchRate, targetPitch, omega.y, omega.z))
@@ -1635,7 +1630,7 @@ local function stuntRollAngularGovernor(vehicle, forward, right, up, now, cfg)
         p.nativeChecked = true
         p.nativeFault = not writeEntityAngularVelocity(vehicle, world.x, world.y, world.z)
         if not p.nativeFault then
-            print(('[rs-thrusters][ROLL GUARD] active via %s; stunt-only angular velocity control'):format(angularSetterBackend))
+            debugLog(('[rs-thrusters][ROLL GUARD] active via %s; stunt-only angular velocity control'):format(angularSetterBackend))
         else
             return
         end
@@ -1682,7 +1677,7 @@ local function stuntRollAngularGovernor(vehicle, forward, right, up, now, cfg)
         return
     end
     p.governorHits = (p.governorHits or 0) + 1
-    if now-lastRollGovernorLog >= cfg.StuntRollGovernorLogMs then
+    if Config.Debug and now-lastRollGovernorLog >= cfg.StuntRollGovernorLogMs then
         lastRollGovernorLog = now
         if phase == 'rotate' and p.nativeRollTarget ~= nil then
             local actual = GetEntityRotationVelocity(vehicle)
@@ -1701,7 +1696,7 @@ local function rollSafeAbort(p, why, now)
     p.abortStableSince = nil
     p.abortReason = why
     p.governorHits = p.governorHits or 0
-    print(('[rs-thrusters][ROLL SAFETY] braking instead of handing high angular speed to hover recovery: %s, progress=%.1f'):format(
+    debugLog(('[rs-thrusters][ROLL SAFETY] braking instead of handing high angular speed to hover recovery: %s, progress=%.1f'):format(
         why, p.progress))
 end
 
@@ -1770,7 +1765,7 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput,
                     preset.progress = math.max(-15.0, preset.progress + math.deg(signedStep))
                     preset.geomRate = signedStep / elapsed
                 else
-                    print(('[rs-thrusters][ROLL TRACK] rejected chassis discontinuity: step=%+.1f degrees'):format(math.deg(step)))
+                    debugLog(('[rs-thrusters][ROLL TRACK] rejected chassis discontinuity: step=%+.1f degrees'):format(math.deg(step)))
                 end
             end
             preset.rollPreviousRight, preset.rollPreviousUp = right, up
@@ -1801,15 +1796,15 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput,
             if math.abs(preset.matrixRate - preset.nativeRate) > cfg.StuntRollRateDisagreement
                 and now - (preset.lastRateWarning or 0) > 600 then
                 preset.lastRateWarning = now
-                print(('[rs-thrusters][ROLL TRACK] disagreement angle=%.1f upZ=%+.2f native=%+.2f matrix=%+.2f chassis=%+.2f'):format(
+                debugLog(('[rs-thrusters][ROLL TRACK] disagreement angle=%.1f upZ=%+.2f native=%+.2f matrix=%+.2f chassis=%+.2f'):format(
                     preset.progress, up.z, preset.nativeRate, preset.matrixRate, preset.geomRate or 0.0))
             end
             local checkpoint = math.floor(preset.progress / 45)
             if checkpoint > (preset.rollCheckpoint or 0) then
                 preset.rollCheckpoint = checkpoint
-                print(('[rs-thrusters][ROLL TRACK] angle=%.1f upZ=%+.2f native=%+.2f matrix=%+.2f chassis=%+.2f torque=%+.2f'):format(
+                debugLog(('[rs-thrusters][ROLL TRACK] angle=%.1f upZ=%+.2f native=%+.2f matrix=%+.2f chassis=%+.2f torque=%+.2f'):format(
                     preset.progress, up.z, preset.nativeRate, preset.matrixRate, preset.geomRate or 0.0, lastRollTorque))
-                print(('[rs-thrusters][ROLL AXES] pitchRate=%+.2f rollRate=%+.2f yawRate=%+.2f forwardZ=%+.2f crossRate=%.2f'):format(
+                debugLog(('[rs-thrusters][ROLL AXES] pitchRate=%+.2f rollRate=%+.2f yawRate=%+.2f forwardZ=%+.2f crossRate=%.2f'):format(
                     omega.x, omega.y, omega.z, forward.z, preset.crossRate))
             end
         end
@@ -1850,7 +1845,7 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput,
                 -- Keep the dedicated roll axis in control through this sector.
                 if not preset.invertedAssist and now - preset.wrongWaySince >= cfg.StuntRollInvertedAssistDelayMs then
                     preset.invertedAssist = true
-                    print(('[rs-thrusters][ROLL TRACK] inverted correction active angle=%.1f upZ=%+.2f native=%+.2f'):format(
+                    debugLog(('[rs-thrusters][ROLL TRACK] inverted correction active angle=%.1f upZ=%+.2f native=%+.2f'):format(
                         preset.progress, up.z, signedRate))
                 end
             elseif now - preset.wrongWaySince >= cfg.StuntWrongWayDelayMs then
@@ -1865,7 +1860,7 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput,
                 or preset.progress >= cfg.StuntHardStopDegrees
                 or (preset.crossUnsafeSince
                     and now-preset.crossUnsafeSince >= cfg.StuntRollCrossAbortMs)) then
-            print(('[rs-thrusters][STUNT] %s watchdog: angle=%.1f signedRate=%.2f crossRate=%.2f measured=%s pitchTorque=%.2f rollTorque=%.2f'):format(
+            debugLog(('[rs-thrusters][STUNT] %s watchdog: angle=%.1f signedRate=%.2f crossRate=%.2f measured=%s pitchTorque=%.2f rollTorque=%.2f'):format(
                 preset.name, preset.progress, signedRate, preset.crossRate or 0.0,
                 tostring(measuredOmega ~= nil), lastPitchTorque, lastRollTorque))
             rollSafeAbort(preset, 'uncontrolled roll or off-axis rotation', now)
@@ -1881,7 +1876,7 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput,
         if not preset.settleUntil and atTarget then
             preset.settleUntil = now + cfg.StuntSettleMs
             preset.phase = 'settle'
-            print(('[rs-thrusters][STUNT] %s rotation target reached at %.0f degrees; braking and levelling'):format(
+            debugLog(('[rs-thrusters][STUNT] %s rotation target reached at %.0f degrees; braking and levelling'):format(
                 preset.name, preset.progress))
         end
         if not preset.settleUntil and rotationElapsed >= (isPitch and cfg.StuntMaxMs or cfg.StuntRollMaxMs) then
@@ -1994,7 +1989,7 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput,
                         preset.brakeStartedAt, preset.brakeStartRate = now, signedRate
                     elseif now - preset.brakeStartedAt >= cfg.StuntRollBrakeResponseMs
                         and signedRate >= preset.brakeStartRate + cfg.StuntRollBrakeRiseLimit then
-                        print(('[rs-thrusters][ROLL SAFETY] reverse thrust did not arrest spin: angle=%.1f first=%.2f now=%.2f source=%s'):format(
+                        debugLog(('[rs-thrusters][ROLL SAFETY] reverse thrust did not arrest spin: angle=%.1f first=%.2f now=%.2f source=%s'):format(
                             preset.progress, preset.brakeStartRate, signedRate,
                             preset.rollSpeedSource or 'unknown'))
                         rollSafeAbort(preset, 'opposing jets ineffective during rotation', now)
@@ -2006,13 +2001,13 @@ local function desiredRotation(vehicle, airborne, levelAssist, turn, pitchInput,
                 correction = correction * sign * (isPitch and 1 or rollActuation)
                 if not isPitch and counterThrust ~= preset.counterThrust then
                     if counterThrust then
-                        print(('[rs-thrusters][STUNT] %s counter-thrust at %.1f degrees, actualRate=%.2f target=%.2f source=%s'):format(
+                        debugLog(('[rs-thrusters][STUNT] %s counter-thrust at %.1f degrees, actualRate=%.2f target=%.2f source=%s'):format(
                             preset.name, preset.progress, signedRate, targetRate,
                             preset.rollSpeedSource or 'unknown'))
                     end
                     preset.counterThrust = counterThrust
                 end
-                if now - preset.lastLog >= 1000 then
+                if Config.Debug and now - preset.lastLog >= 1000 then
                     preset.lastLog = now
                     print(('[rs-thrusters][STUNT] %s angle=%.0f/%d rate=%.2f target=%.2f output=%.2f source=%s'):format(
                         preset.name,preset.progress,cfg.StuntTargetDegrees,signedRate,targetRate,correction,
@@ -2229,10 +2224,10 @@ CreateThread(function()
                 local clearingSurface = hoverLaunchClearSince ~= nil
                 if clearingSurface and not wasClearingSurface then
                     hoverTrim, hoverDrive, hoverSlide = 0.0, 0.0, 0.0
-                    print(('[rs-thrusters][LAUNCH] symmetric lift; AGL=%.2f upZ=%.2f'):format(h, up.z))
+                    debugLog(('[rs-thrusters][LAUNCH] symmetric lift; AGL=%.2f upZ=%.2f'):format(h, up.z))
                 elseif wasClearingSurface and not clearingSurface and launchEligible then
                     hoverResumeAt = now
-                    print(('[rs-thrusters][LAUNCH] clear of surface; AGL=%.2f upZ=%.2f'):format(h, up.z))
+                    debugLog(('[rs-thrusters][LAUNCH] clear of surface; AGL=%.2f upZ=%.2f'):format(h, up.z))
                 end
                 if clearingSurface then throttle, turn, slide, pitchInput = 0.0, 0.0, 0.0, 0.0 end
                 local resumeBlend = hoverResumeAt and clamp((now - hoverResumeAt) / cfg.HoverResumeMs, 0.0, 1.0) or 1.0
@@ -2282,7 +2277,7 @@ CreateThread(function()
                     if preset then finishStunt(veh, false, 'collision / object while performing stunt') end
                     if now - collisionLogAt > 1200 then
                         collisionLogAt = now
-                        print(('[rs-thrusters][COLLISION] flight upset; rate=%.2f tiltUp=%.2f height=%.2f vz=%.2f contact=%s obstacle=%s; thrust limiting'):format(
+                        debugLog(('[rs-thrusters][COLLISION] flight upset; rate=%.2f tiltUp=%.2f height=%.2f vz=%.2f contact=%s obstacle=%s; thrust limiting'):format(
                             angularShock, up.z, h, v.z, tostring(freshContact), tostring(obstacle)))
                     end
                 end
@@ -2362,15 +2357,15 @@ CreateThread(function()
                     recoveryAxis, recoverySign = nil, nil
                     if hoverRecovering then
                         local action = catchingHover and 'catching jump' or 'stabilizing'
-                        print(('[rs-thrusters][RECOVERY] %s tilt=%.2f angular=%.2f vz=%.2f'):format(
+                        debugLog(('[rs-thrusters][RECOVERY] %s tilt=%.2f angular=%.2f vz=%.2f'):format(
                             action, up.z, fullRate, v.z))
                     else
-                        print('[rs-thrusters][RECOVERY] stable; full hover control restored')
+                        debugLog('[rs-thrusters][RECOVERY] stable; full hover control restored')
                     end
                 elseif hoverRecovering and now - recoverySince > 10000 and now - recoveryReportAt > 10000 then
                     -- One diagnostic per 10 seconds, not one every timeout.
                     recoveryReportAt = now
-                    print(('[rs-thrusters][RECOVERY] still stabilizing tilt=%.2f angular=%.2f vz=%.2f'):format(up.z, fullRate, v.z))
+                    debugLog(('[rs-thrusters][RECOVERY] still stabilizing tilt=%.2f angular=%.2f vz=%.2f'):format(up.z, fullRate, v.z))
                 end
                 local recovering = hover and (hoverRecovering or (recoverySteer ~= 0 and up.z < 0.0))
                 local assistedRecovery = assistedHover and recovering
@@ -2418,8 +2413,7 @@ CreateThread(function()
                                 preset.startForwardZ = forward.z
                                 preset.crossUnsafeSince = nil
                             end
-                            notice(('%s: rotating.'):format(preset.name))
-                            print(('[rs-thrusters][STUNT] %s ROTATE at AGL %.2f rate=%.2f'):format(preset.name,h,fullRate))
+                            debugLog(('[rs-thrusters][STUNT] %s ROTATE at AGL %.2f rate=%.2f'):format(preset.name,h,fullRate))
                         end
                     end
                 end
@@ -2723,7 +2717,7 @@ local function loadAsset()
     local deadline = GetGameTimer() + 4000
     while not HasNamedPtfxAssetLoaded(Config.Fx.Asset) and GetGameTimer() < deadline do Wait(50) end
     assetLoaded = HasNamedPtfxAssetLoaded(Config.Fx.Asset)
-    if not assetLoaded then debugLog('Particle asset failed to load: ' .. Config.Fx.Asset) end
+    if not assetLoaded then debugLog('[rs-thrusters] Particle asset failed to load: ' .. Config.Fx.Asset) end
     return assetLoaded
 end
 local function exhaustColor(speed, output)

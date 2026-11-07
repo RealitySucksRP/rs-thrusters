@@ -1,5 +1,17 @@
 # RS Thrusters changelog
 
+## 0.1.72 - 2026-11-07
+
+- Configure default left and right roll keys in `Config.Keybinds`. Both actions remain rebindable in FiveM.
+
+## 0.1.71 - 2026-11-07
+
+- Keep routine flight, recovery, and stunt logs off by default. Enable `Config.Debug` for verbose logs. Failure summaries and on-demand diagnostics remain available.
+
+## 0.1.70 - 2026-11-07
+
+- Send routine roll and flip progress to F8 only. Keep on-screen notices for failed or canceled stunts.
+
 ## 0.1.69 - 2026-11-07
 
 - Start native barrel rolls directly from the existing keyboard and Xbox stunt inputs, including on models with no saved calibration.

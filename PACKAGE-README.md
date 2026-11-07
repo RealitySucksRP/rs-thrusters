@@ -1,4 +1,4 @@
-# RS Thrusters v0.1.69
+# RS Thrusters v0.1.72
 
 Installable directional thrusters for FiveM automobiles, with assisted hover, native angular-velocity stabilization, full 360-degree stunts, and synchronized vapor effects.
 
@@ -48,7 +48,7 @@ See [CHANGELOG.md](CHANGELOG.md) for recent changes and validation status.
 
 ## Controls
 
-Keyboard defaults can be changed under GTA Settings > Key Bindings > FiveM. Existing player overrides take precedence.
+Set `Config.Keybinds.RollRight` and `Config.Keybinds.RollLeft` in `config.lua` to change the default roll keys. Use uppercase letters such as `K` and `L`. Players can rebind **RS Thrusters - Assisted right barrel roll** and **RS Thrusters - Assisted left barrel roll** under GTA Settings > Key Bindings > FiveM. Saved player bindings take precedence over the defaults.
 
 | Action | Keyboard | Xbox |
 | --- | --- | --- |
@@ -101,6 +101,8 @@ add_ace group.admin rs_thrusters.test allow
 Then use `/rstinstall` or `/rstrefill` as the driver. These commands are disabled unless developer mode and the ACE permission are enabled.
 
 ## Configuration
+
+- `Config.Debug = false` keeps routine flight and stunt logs quiet. Use `/rstdiag` for an on-demand snapshot.
 
 - `Config.Pressure.ConsumptionEnabled = false` keeps effective gas pressure full for testing. Set it to `true` for tank consumption.
 - `DefaultDurationSeconds = 180`, `MinDurationSeconds = 60`, and `MaxDurationSeconds = 600` control tank duration. `AllowPlayerDuration` allows the F7 slider within those limits. The baseline is four lift jets at full output. Actual duration depends on active jets and output.
