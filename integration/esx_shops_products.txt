@@ -1,0 +1,6 @@
+-- Modern esx_shops (ESX Legacy): insert these into an EXISTING
+-- Config.Zones.<YourMechanicOrBlackmarket>.Items = { ... } table.
+-- Old forks may have different config paths/fields.
+-- Ensure the named category exists if your NUI needs Categories.
+{ name = 'rs_thruster_kit', label = 'RS Thruster Kit', price = 25000, category = 'vehicle' },
+{ name = 'rs_thruster_refill', label = 'Thruster Gas Cartridge', price = 2500, category = 'vehicle' },

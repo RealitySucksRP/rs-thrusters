@@ -1,0 +1,7 @@
+-- qb-shops/config.lua: insert inside the product list used by your ACTUAL
+-- mechanic/vehicle-parts shop or black-market location. No job restriction
+-- on these rows; restrict location access separately if appropriate.
+{ name = 'rs_thruster_kit', price = 25000, amount = 10 },
+{ name = 'rs_thruster_refill', price = 2500, amount = 25 },
+-- A Config.Products category with no matching Config.Locations reference
+-- does NOT make these items purchasable in game.

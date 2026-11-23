@@ -1,4 +1,4 @@
-# RS Thrusters v0.1.72
+# RS Thrusters v0.1.83
 
 Installable directional thrusters for FiveM automobiles, with assisted hover, native angular-velocity stabilization, full 360-degree stunts, and synchronized vapor effects.
 

@@ -72,7 +72,7 @@ window.addEventListener('message',ev=>{
    slider.max=d.tankMax;
    slider.value=d.tankDuration;
    slider.disabled=!d.consumptionEnabled||!d.allowTankDuration;
-   $('tankHelp').textContent=!d.consumptionEnabled?'Unlimited fuel for testing.':
+   $('tankHelp').textContent=!d.consumptionEnabled?'Unlimited gas enabled by your server.':
      d.allowTankDuration?'Time at full lift output. Other maneuvers use gas at different rates.':
      'Tank duration is set by the server.';
    if(d.consumptionEnabled) showTankDuration();

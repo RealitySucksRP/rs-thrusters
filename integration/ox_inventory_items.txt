@@ -1,22 +1,17 @@
--- Paste these entries INSIDE your existing ox_inventory/data/items.lua table.
--- Do not replace the entire file with this example.
-
+-- Qbox / QBCore with ox_inventory: paste entries INSIDE the existing
+-- ox_inventory/data/items.lua table. Do not replace the whole file.
+-- Qbox: do NOT edit qbx_core/shared/items.lua (deprecated).
 ['rs_thruster_kit'] = {
-    label = 'Cold-Gas Thruster Kit',
-    description = 'Install a directional cold-gas thruster system on an automobile.',
-    weight = 6000,
-    stack = false,
-    close = true,
-    consume = 0, -- server removes item ONLY after verified installation
-    client = { export = 'rs-thrusters.installKit' },
+    label = 'RS Thruster Kit',
+    description = 'Install a cold-gas flight and hover kit on a parked automobile.',
+    weight = 6000, stack = false, close = true,
+    consume = 0, -- rs-thrusters validates and removes one item after successful installation
+    client = { image = 'rs_thruster_kit.png', export = 'rs-thrusters.installKit' },
 },
-
 ['rs_thruster_refill'] = {
     label = 'Thruster Gas Cartridge',
-    description = 'Refill the thruster system on an installed vehicle.',
-    weight = 1800,
-    stack = true,
-    close = true,
-    consume = 0, -- server removes item ONLY after verified refilling
-    client = { export = 'rs-thrusters.refillKit' },
+    description = 'Refill the cold-gas system installed on a vehicle.',
+    weight = 1800, stack = true, close = true,
+    consume = 0, -- rs-thrusters validates and removes one item after successful refill
+    client = { image = 'rs_thruster_refill.png', export = 'rs-thrusters.refillKit' },
 },

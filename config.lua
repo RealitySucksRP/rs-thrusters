@@ -1,5 +1,5 @@
 Config = {}
-Config.Version = '0.1.72'
+Config.Version = '0.1.83'
 
 -- Default roll keys. Players can override them in Settings > Key Bindings > FiveM.
 Config.Keybinds = {
@@ -17,32 +17,66 @@ function Config.PropulsionKind(kind)
     return kind
 end
 
--- Open source, standalone first build. ox_inventory and ox_target are optional.
+-- Standalone flight; optional QBCore, Qbox/ox_inventory, ESX, or standalone ox_inventory items.
 Config.ItemKit = 'rs_thruster_kit'
 Config.ItemRefill = 'rs_thruster_refill'
 Config.InstallDistance = 4.0
 Config.MaxInstallSpeed = 1.5 -- meters per second
 Config.DriverSyncInterval = 4000
 
--- Test commands are OFF by default. Enable with server.cfg:
+-- ACE commands are OFF by default, and remain administrator-only.
+-- Purchased inventory items do NOT require ACE. Enable test commands with server.cfg:
 -- set rs_thrusters_dev_mode 1
 -- add_ace group.admin rs_thrusters.test allow
 -- Then (in a car as the driver): /rstinstall and /rstrefill
 Config.TestAce = 'rs_thrusters.test'
 
+-- Optional PLAYER-TO-SHOP buyback. Separate from shops SELLING the kits.
+-- Disabled until the server owner configures actual shop coordinates below.
+-- No fictional GTA map locations are shipped. The server checks distance,
+-- item ownership and payout; anyone can sell an UNUSED inventory item.
+Config.Buyback = {
+    Enabled = false,
+    MaxDistance = 3.0,
+    CooldownMs = 1800,
+    Prices = {
+        mechanic = { rs_thruster_kit = 12500, rs_thruster_refill = 1250 },
+        blackmarket = { rs_thruster_kit = 10000, rs_thruster_refill = 1000 },
+    },
+    Locations = {
+        -- Set Enabled=true AND insert your actual store position(s):
+        -- { type = 'mechanic', coords = vector3(X, Y, Z), currency = 'cash' },
+        -- { type = 'blackmarket', coords = vector3(X, Y, Z), currency = 'cash' },
+        -- QBCore/Qbox support cash/bank; ESX additionally supports black_money.
+        -- Standalone ox_inventory uses the 'money' inventory item for cash.
+    },
+}
+
 -- One normalized model+plate record per vehicle. Integrate a garage VIN for production.
 Config.MaxPressure = 100.0
--- Pressure is normalized tank capacity, not calibrated real-world bar/PSI.
--- Engine thrust scales with sqrt(remaining fraction): a GAMEPLAY approximation.
+-- Gas economy is SERVER-AUTHORITATIVE and independent from flight physics.
+-- Modes: 'unlimited' (everyone, default), 'refill' (everyone uses cartridges),
+-- 'mixed' (ACE-authorized drivers get unlimited; others use cartridges).
+-- ACE is attached to the CURRENT DRIVER, never permanently to the car.
+Config.Gas = {
+    Mode = 'unlimited',
+    RefillMinutes = 60, -- minimum 60 minutes of actual active thruster use per FULL tank
+    UnlimitedAce = 'rs_thrusters.unlimited',
+    EmergencyLandingReserve = true,
+    EmergencyReserveSeconds = 60, -- extra after the 60-minute tank is empty; land promptly
+}
+
+-- Compatibility with the existing settings UI. These are now DERIVED from
+-- Config.Gas. Do not enable player-selected duration: a client must never be
+-- able to choose its own fuel consumption rate or override the server economy.
 Config.Pressure = {
-    -- Set true to use stored gas. False gives installed cars full effective
-    -- pressure for testing without changing their saved tank levels.
-    ConsumptionEnabled = false,
-    AllowPlayerDuration = true,
-    DefaultDurationSeconds = 180,
-    MinDurationSeconds = 60,
-    MaxDurationSeconds = 600,
+    ConsumptionEnabled = Config.Gas.Mode ~= 'unlimited',
+    AllowPlayerDuration = false,
+    DefaultDurationSeconds = math.max(60, tonumber(Config.Gas.RefillMinutes) or 60) * 60,
+    MinDurationSeconds = 3600,
+    MaxDurationSeconds = 86400,
     MinOperational = 1.0,
+    -- Retained for older integrations; nozzle count does NOT shorten the tank.
     BurnPerNozzle = {rear = 0.75, belly = 0.68, front = 0.8, side = 0.45},
 }
 
@@ -293,6 +327,13 @@ Config.Fx = {
         {Distance = 0.28, Scale = 1.18, Alpha = 0.78, Fade = 0.85},
         {Distance = 1.55, Scale = 1.75, Alpha = 0.90, Fade = 1.75},
     },
+    Motion = {
+        Enabled = true,
+        TurnLagMs = 175,
+        JetSpeed = 6.2, -- meters per second used to shape the vapor trail
+        Gravity = 9.81,
+        HorizontalReach = 0.60, -- keep the front, rear and side layers close to their outlets
+    },
     FadeMs = 1100, -- each jet tapers off after the thrust stops
     -- Visual placement only. Pull side exhaust inside the wheel-width bounds.
     SideInset = 0.76,
@@ -305,14 +346,20 @@ Config.Fx = {
     Colors = {solid='#5bdcff', slow='#5bdcff', fast='#b95cff', overrun='#ff7138'},
     RenderDistance = 85.0,
     Debug = false,
-    -- Editable per-nozzle rotations in DEGREES, relative to the vehicle.
-    -- Actual visual direction depends on Rockstar's PTFX asset orientation.
+    -- Vehicle-relative rotations in degrees for custom assets or with Motion disabled.
     Rotations = {
         rear = { 0.0, 0.0, 0.0 },
         belly = { 180.0, 0.0, 0.0 },
         front = { 0.0, 0.0, 180.0 },
         left = { 0.0, -90.0, 0.0 },
         right = { 0.0, 90.0, 0.0 },
+    },
+    -- Visual-only overrides. These do NOT change force application or handling.
+    -- Motion uses the offsets below and aims the steam along each nozzle's exhaust direction.
+    NozzleOverrides = {
+        -- Secondary side gas thrusters: keep them horizontal and mounted farther back.
+        side_rear_l = { y = -0.88, z = 0.08, rot = { 0.0, -90.0, 90.0 } },
+        side_rear_r = { y = -0.88, z = 0.08, rot = { 0.0, 90.0, -90.0 } },
     }
 }
 

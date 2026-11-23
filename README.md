@@ -1,6 +1,6 @@
 # RS Thrusters
 
-**Current source: v0.1.72** · Native barrel rolls start directly from your stunt input. Default roll keys are configurable. Routine stunt popups and F8 logs are off by default.
+**Current source: v0.1.83** · Native barrel rolls start directly from your stunt input. Default roll keys are configurable. Routine stunt popups and F8 logs are off by default.
 
 Install the resource at `resources/[rs-resources]/rs-thrusters` and add `ensure rs-thrusters` to `server.cfg`.
 

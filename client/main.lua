@@ -96,9 +96,26 @@ local function installed(vehicle)
 end
 
 local tankDuration = Config.Pressure.DefaultDurationSeconds
+local function gasUnlimited(vehicle)
+    if not installed(vehicle) then return false end
+    if Config.Gas.Mode == 'unlimited' then return true end
+    if Config.Gas.Mode ~= 'mixed' or driverVehicle() ~= vehicle then return false end
+    local state = Entity(vehicle).state
+    -- Require matching CURRENT driver ID so VIP entitlement can't transfer
+    -- to another person or linger after a seat change.
+    return state.rsThrustersGasDriver == GetPlayerServerId(PlayerId())
+        and state.rsThrustersUnlimited == true
+end
 local function pressure(vehicle)
-    if not Config.Pressure.ConsumptionEnabled and installed(vehicle) then return Config.MaxPressure end
-    return math.max(0.0, tonumber(Entity(vehicle).state.rsThrustersPressure) or 0.0)
+    if vehicle == 0 or not installed(vehicle) then return 0.0 end
+    if gasUnlimited(vehicle) then return Config.MaxPressure end
+    local state = Entity(vehicle).state
+    local tank = math.max(0.0, tonumber(state.rsThrustersPressure) or 0.0)
+    if tank <= 0 and Config.Gas.EmergencyLandingReserve
+        and (tonumber(state.rsThrustersReserveSeconds) or 0) > 0 then
+        return Config.Pressure.MinOperational -- operational during landing reserve
+    end
+    return tank
 end
 
 local function validActiveVehicle()
@@ -472,11 +489,23 @@ local function toggleThrusters()
         trackedVehicle = veh
         notice('Thrusters ON | SPACE lift | SHIFT / R3 boost | H hover | RB + left stick stunts')
     else
-        notice('Thruster pressure empty; refill the tank.')
+        if Config.Gas.Mode == 'mixed' and Entity(veh).state.rsThrustersGasDriver ~= GetPlayerServerId(PlayerId()) then
+            local id = netId(veh)
+            if id > 0 then TriggerServerEvent('rs_thrusters:syncVehicle', id) end
+            notice('Checking unlimited-gas access; try again shortly.')
+        else
+            notice('Thruster pressure empty; refill the tank.')
+        end
     end
 end
 RegisterCommand('rst_thr_toggle', toggleThrusters, false)
 RegisterKeyMapping('rst_thr_toggle', 'RS Thrusters - On / Off', 'keyboard', 'G')
+RegisterCommand('rstgas', function()
+    local veh = driverVehicle()
+    if veh == 0 or not installed(veh) then return notice('Drive an upgraded vehicle to inspect gas access.') end
+    local id = netId(veh)
+    if id > 0 then TriggerServerEvent('rs_thrusters:gasDiag', id) end
+end, false)
 
 RegisterCommand('+rst_thr_lift', function() onLift(true) end, false)
 RegisterCommand('-rst_thr_lift', function() onLift(false) end, false)
@@ -540,16 +569,18 @@ RegisterCommand('-rst_thr_mod', function() input.mod=false end, false)
 -- Poll GTA's Xbox controls because Enhanced rejected the old PAD_DIGITALBUTTON mappings.
 CreateThread(function()
     local padLift = false
+    local dpadUp = 172 -- INPUT_CELLPHONE_UP
     while true do
         local vehicle = driverVehicle()
         local driving = vehicle ~= 0 and installed(vehicle) and not menuOpen and not IsPauseMenuActive()
         if driving and not IsInputDisabled(0) then
             if IsControlJustPressed(0,187) then toggleThrusters() end
-            input.padBoost, input.padStunt = false, false
+            input.padBoost, input.padStunt, input.padDescend = false, false, false
             if enabled then
                 DisableControlAction(0, 79, true) -- Xbox R3, usually vehicle look-behind
                 input.padBoost = GetDisabledControlNormal(0, 79) > 0.5
-                input.mod = IsControlPressed(0,226)
+                local lb = IsControlPressed(0,226)
+                input.mod = lb == true or lb == 1
                 local rb = IsControlPressed(0,227)
                 input.padStunt = rb == true or rb == 1
                 if input.padStunt then
@@ -559,16 +590,26 @@ CreateThread(function()
                 if IsControlJustPressed(0,193) then
                     if input.padStunt then queueStunt('roll', 1) else toggleHover() end
                 end
-                if input.mod and IsControlJustPressed(0,172) then ExecuteCommand('rstrecover') end
+                local canDescend = hover and hoverStyle == 'helicopter' and not descending
+                if input.mod or canDescend then
+                    DisableControlAction(0, 27, true) -- D-pad Up would also open the phone.
+                    if input.mod then
+                        local recover = IsControlJustPressed(0, dpadUp)
+                        if recover == true or recover == 1 then ExecuteCommand('rstrecover') end
+                    else
+                        local lower = IsControlPressed(0, dpadUp)
+                        input.padDescend = lower == true or lower == 1
+                    end
+                end
             end
             local lift = enabled and IsControlPressed(0,191)
             local brake = enabled and IsControlPressed(0,225)
             if lift ~= padLift then onLift(lift) end
-            input.padBrake = brake
+            input.padBrake = brake == true or brake == 1
             padLift = lift
         else
             if padLift then onLift(false) end
-            input.padBrake, input.padBoost, input.padStunt = false, false, false
+            input.padBrake, input.padBoost, input.padStunt, input.padDescend = false, false, false, false
             padLift = false
             input.mod = false
         end
@@ -636,8 +677,8 @@ RegisterCommand('rstmenu', function()
     for k in pairs(input) do input[k] = false end
     SetNuiFocus(true, true)
     SendNUIMessage({type='panel', open=true, mode=mode,
-        consumptionEnabled=Config.Pressure.ConsumptionEnabled,
-        allowTankDuration=Config.Pressure.AllowPlayerDuration,
+        consumptionEnabled=not gasUnlimited(veh),
+        allowTankDuration=false,
         tankDuration=tankDuration, tankMin=Config.Pressure.MinDurationSeconds, tankMax=Config.Pressure.MaxDurationSeconds,
         landingAssist=landingAssist, hudVisible=hudVisible, chaseEnabled=chaseEnabled, hoverStyle=hoverStyle,
         controllerPitchEnabled=controllerPitchEnabled,
@@ -755,21 +796,38 @@ end
 exports('installKit', function(data, slot) installAction('install', nil, data) end)
 exports('refillKit', function(data, slot) installAction('refill', nil, data) end)
 
+-- Called by server-registered QBCore usable items (qb-inventory).
+-- The authoritative server validates and consumes the player's item after animation.
+RegisterNetEvent('rs_thrusters:useFrameworkItem', function(action)
+    if action == 'install' or action == 'refill' then
+        installAction(action)
+    end
+end)
+
+local function hasInstallItemClient(itemName)
+    if GetResourceState('ox_inventory') == 'started' then
+        local ok, count = pcall(function() return exports.ox_inventory:Search('count', itemName) end)
+        return ok and type(count) == 'number' and count > 0
+    end
+    -- qb-inventory HasItem exports differ by version. Show interaction on
+    -- QBCore servers and let the existing server-authoritative debit verify.
+    return GetResourceState('qb-core') == 'started'
+end
+
+
 local targetRegistered = false
 local function registerTarget()
     if targetRegistered or GetResourceState('ox_target') ~= 'started' then return end
     exports.ox_target:addGlobalVehicle({
         { name='rs_thrusters:install', label='Install cold-gas thruster kit', icon='fa-solid fa-rocket', distance=Config.InstallDistance,
             canInteract=function(entity)
-                return isEligible(entity) and not installed(entity) and GetResourceState('ox_inventory') == 'started'
-                    and exports.ox_inventory:Search('count', Config.ItemKit) > 0
+                return isEligible(entity) and not installed(entity) and hasInstallItemClient(Config.ItemKit)
             end,
             onSelect=function(data) installAction('install', data.entity) end },
         { name='rs_thrusters:refill', label='Refill thruster tank', icon='fa-solid fa-gas-pump', distance=Config.InstallDistance,
             canInteract=function(entity)
                 return isEligible(entity) and installed(entity) and pressure(entity) < Config.MaxPressure - 0.1
-                    and GetResourceState('ox_inventory') == 'started'
-                    and exports.ox_inventory:Search('count', Config.ItemRefill) > 0
+                    and hasInstallItemClient(Config.ItemRefill)
             end,
             onSelect=function(data) installAction('refill', data.entity) end },
     })
@@ -885,6 +943,22 @@ local function localOffset(bounds, nozzle)
     return mi.x + (nozzle.x+1)*0.5*(ma.x-mi.x),
            mi.y + (nozzle.y+1)*0.5*(ma.y-mi.y),
            mi.z + (nozzle.z+1)*0.5*(ma.z-mi.z)
+end
+
+local function visualNozzle(nozzle)
+    local overrides = Config.Fx and Config.Fx.NozzleOverrides
+    if not overrides then return nozzle, nil end
+    local o = overrides[nozzle.name]
+    if not o then return nozzle, nil end
+    return {
+        name = nozzle.name,
+        kind = nozzle.kind,
+        bit = nozzle.bit,
+        x = o.x ~= nil and o.x or nozzle.x,
+        y = o.y ~= nil and o.y or nozzle.y,
+        z = o.z ~= nil and o.z or nozzle.z,
+        dir = nozzle.dir,
+    }, o.rot
 end
 
 -- All maneuvering forces are created by visible, physical nozzles.
@@ -2128,7 +2202,9 @@ CreateThread(function()
                 if rollProbe then updateRollProbe(veh, forward, right, up, measuredOmega, GetGameTimer()) end
                 local fwd = GetEntityForwardVector(veh)
                 local forwardSpeed = v.x*fwd.x + v.y*fwd.y + v.z*fwd.z
-                local factor = math.sqrt(clamp(pressure(veh)/Config.MaxPressure,0,1))
+                -- Keep actual propulsion power unchanged as the tank empties.
+                -- The gas economy only gates availability, not force magnitude.
+                local factor = 1.0
                 local levels = {}
                 local airborne = (h > cfg.AirborneHeight and (not grounded or preset ~= nil))
                     or (not grounded and h > 0.5 and inAir)
@@ -2184,11 +2260,12 @@ CreateThread(function()
                 local driveHeading, nativeRates
                 local verticalLift = false
                 local helicopter = hover and hoverStyle == 'helicopter'
-                -- In Helicopter hover B descends; LB+B requests air braking.
+                -- D-pad Up lowers Helicopter hover. LB+B requests air braking.
+                local descendHeld = input.descend or input.padDescend
                 local braking = input.brake or (input.padBrake and (not helicopter or input.mod))
                 local collective = 0.0
                 if helicopter and not preset and controlsAvailable then
-                    collective = (input.lift and 1 or 0) - ((input.descend or (input.padBrake and not input.mod)) and 1 or 0)
+                    collective = (input.lift and 1 or 0) - (descendHeld and 1 or 0)
                     if collective ~= 0 then
                         -- On a fresh climb/descent command start from the ACTUAL
                         -- world altitude. Never snap the target back to 3.2 m.
@@ -2204,7 +2281,7 @@ CreateThread(function()
                             notice('Landed. Hover assist OFF.')
                         end
                     elseif lastCollective ~= 0 then
-                        -- Pilot released A/B: maintain the present altitude.
+                        -- Maintain the present altitude when the pilot releases climb or descent.
                         hoverWorldTarget = pos.z
                         hoverHeight = math.max(0.3, pos.z - (hoverFloor or floor))
                     end
@@ -2530,7 +2607,7 @@ CreateThread(function()
                         liftDemand = math.min(0.85, hoverCollectiveDemand(targetVz, h, v.z, grounded, factor, dt, cfg))
                     elseif hoverCollective then
                         verticalLift = true
-                        local floorMargin = helicopter and (input.descend or input.padBrake) and 0.3 or 0.80
+                        local floorMargin = helicopter and descendHeld and 0.3 or 0.80
                         local targetZ = hoverWorldTarget or ((hoverFloor or floor) + hoverHeight)
                         if h < 0.75 then targetZ = math.max(targetZ, floor + floorMargin) end
                         local targetVz = clamp((targetZ - pos.z) * cfg.HoverHeightGain, -cfg.HoverDescentSpeed, cfg.HoverClimbSpeed)
@@ -2727,11 +2804,68 @@ local function exhaustColor(speed, output)
     return speed >= Config.Fx.SpeedColorThreshold and fxColors.fast or fxColors.slow
 end
 
+local fxMotion = Config.Fx.Motion
+if type(fxMotion) ~= 'table' or fxMotion.Enabled == false or Config.Fx.Asset ~= 'core'
+    or Config.Fx.Name ~= 'ent_sht_steam' or type(SetParticleFxLoopedOffsets) ~= 'function' then
+    fxMotion = nil
+end
+
+local function steamRotation(direction)
+    -- The steam asset emits along local +Z. Pitch then yaw aim it along the plume tangent.
+    local horizontal = math.sqrt(direction.x * direction.x + direction.y * direction.y)
+    local pitch = math.deg(math.atan(horizontal, direction.z))
+    local yaw = horizontal > 0.0001 and math.deg(math.atan(direction.x, -direction.y)) or 0.0
+    return pitch, 0.0, yaw
+end
+
+if fxMotion then
+    CreateThread(function()
+        local turnLag = math.max(1, tonumber(fxMotion.TurnLagMs) or 175)
+        local jetSpeed = math.max(1.0, tonumber(fxMotion.JetSpeed) or 6.2)
+        local gravity = math.max(0.0, tonumber(fxMotion.Gravity) or 9.81)
+        while true do
+            local now = GetGameTimer()
+            for vehicle, entry in pairs(emitters) do
+                if next(entry.tails) and DoesEntityExist(vehicle) then
+                    local forward, right, up = GetEntityMatrix(vehicle)
+                    local pose = entry.pose
+                    if not pose then
+                        pose = {forward=forward, right=right, up=up, time=now}
+                        entry.pose = pose
+                    end
+                    local blend = 1.0 - math.exp(-math.max(0, now - pose.time) / turnLag)
+                    pose.forward = pose.forward + (forward - pose.forward) * blend
+                    pose.right = pose.right + (right - pose.right) * blend
+                    pose.up = pose.up + (up - pose.up) * blend
+                    pose.time = now
+                    local down = vector3(-right.z, -forward.z, -up.z)
+                    for key, tail in pairs(entry.tails) do
+                        local axis = tail.direction
+                        -- Compare the delayed world axis with the current nozzle direction.
+                        local delayed = pose.right * axis.x + pose.forward * axis.y + pose.up * axis.z
+                        local localAxis = vector3(dot(delayed, right), dot(delayed, forward), dot(delayed, up))
+                        local bend = localAxis - axis * dot(localAxis, axis)
+                        local path = axis + bend * (0.5 / math.max(0.5, #bend))
+                        local distance = tail.distance
+                        local fallSlope = gravity * distance / (jetSpeed * jetSpeed)
+                        local position = tail.origin + path * distance + down * (0.5 * fallSlope * distance)
+                        local pitch, roll, yaw = steamRotation(path + down * fallSlope)
+                        SetParticleFxLoopedOffsets(entry.handles[key], position.x, position.y, position.z, pitch, roll, yaw)
+                    end
+                else
+                    entry.pose = nil
+                end
+            end
+            Wait(next(emitters) and 33 or 210)
+        end
+    end)
+end
+
 local function setEffects(vehicle, mask, intensity, ownVehicle, hoverExhaust, jumpExhaust)
     local entry = emitters[vehicle]
     if not entry then
         if mask == 0 or not assetLoaded then return end
-        entry = {handles={}, fadeStarted={}, refreshAt={}, mask=0, intensity=-1}
+        entry = {handles={}, tails={}, fadeStarted={}, refreshAt={}, mask=0, intensity=-1}
         emitters[vehicle] = entry
     end
     intensity = clamp(tonumber(intensity) or 1.0, 0.0, 1.0)
@@ -2757,12 +2891,13 @@ local function setEffects(vehicle, mask, intensity, ownVehicle, hoverExhaust, ju
             entry.refreshAt[nozzle.name] = nil
         end
         local active = (mask & nozzle.bit) ~= 0
-        local x, y, z = localOffset(bounds, nozzle)
+        local fxNozzle, overrideRot = visualNozzle(nozzle)
+        local x, y, z = localOffset(bounds, fxNozzle)
         if side then
             local centerX = (bounds.minB.x + bounds.maxB.x) * 0.5
             x = centerX + (x - centerX) * Config.Fx.SideInset
         end
-        local rot = Config.Fx.Rotations[nozzle.kind]
+        local rot = overrideRot or Config.Fx.Rotations[nozzle.kind]
         local color = ownVehicle and exhaustColor(speed, nozzleOutput[nozzle.name] or 0.0) or '#ffffff'
         local red = tonumber(color:sub(2,3), 16) / 255
         local green = tonumber(color:sub(4,5), 16) / 255
@@ -2780,7 +2915,7 @@ local function setEffects(vehicle, mask, intensity, ownVehicle, hoverExhaust, ju
                 if liftJet and handle then
                     local exists = DoesParticleFxLoopedExist(handle)
                     if exists ~= true and exists ~= 1 then
-                        entry.handles[key] = nil
+                        entry.handles[key], entry.tails[key] = nil, nil
                         handle = nil
                     end
                 end
@@ -2789,13 +2924,25 @@ local function setEffects(vehicle, mask, intensity, ownVehicle, hoverExhaust, ju
                     -- Exhaust travels in the opposite direction to the force on the car.
                     local offset = layer.Distance * math.min(fxScale, 1.2)
                     local dir = nozzle.dir
+                    local pitch, roll, yaw = rot[1], rot[2], rot[3]
+                    local axis
+                    if fxMotion then
+                        if nozzle.kind ~= 'belly' then
+                            offset = offset * clamp(tonumber(fxMotion.HorizontalReach) or 0.60, 0.1, 1.0)
+                        end
+                        axis = vector3(-dir[1], -dir[2], -dir[3])
+                        pitch, roll, yaw = steamRotation(axis)
+                    end
                     UseParticleFxAssetNextCall(Config.Fx.Asset)
                     local newHandle = StartParticleFxLoopedOnEntity(Config.Fx.Name, vehicle,
                         x - dir[1] * offset, y - dir[2] * offset, z - dir[3] * offset,
-                        rot[1], rot[2], rot[3], scale, false, false, false)
+                        pitch, roll, yaw, scale, false, false, false)
                     if newHandle and newHandle ~= 0 then
                         if handle then StopParticleFxLooped(handle, false) end
                         handle, entry.handles[key] = newHandle, newHandle
+                        if axis and offset > 0.0 then
+                            entry.tails[key] = { origin=vector3(x, y, z), direction=axis, distance=offset }
+                        end
                     elseif Config.Fx.Debug then
                         print('[rs-thrusters] FX failed at ' .. key)
                     end
@@ -2816,7 +2963,7 @@ local function setEffects(vehicle, mask, intensity, ownVehicle, hoverExhaust, ju
                     SetParticleFxLoopedAlpha(handle, layer.Alpha * remaining * remaining)
                 else
                     StopParticleFxLooped(handle, false)
-                    entry.handles[key], entry.fadeStarted[key] = nil, nil
+                    entry.handles[key], entry.fadeStarted[key], entry.tails[key] = nil, nil, nil
                 end
             end
         end
@@ -2881,6 +3028,9 @@ CreateThread(function()
                 local tilt = math.deg(math.acos(clamp(up.z,-1,1)))
                 local rate = math.deg(math.sqrt(omega.x^2+omega.y^2+omega.z^2))
                 local gas = pressure(veh)
+                local reserveNow = tonumber(Entity(veh).state.rsThrustersReserveSeconds) or 0
+                local reserveActive = not gasUnlimited(veh) and Config.Gas.EmergencyLandingReserve
+                    and (tonumber(Entity(veh).state.rsThrustersPressure) or 0) <= 0 and reserveNow > 0
                 local warning, severity = 'STABLE', 'ok'
                 if enabled then
                     if h > Config.Physics.AirborneHeight and tilt >= 65 then warning,severity='SEVERE TILT','critical'
@@ -2888,6 +3038,7 @@ CreateThread(function()
                     elseif h > Config.Physics.AirborneHeight and rate >= 95 and not preset then warning,severity='HIGH ROTATION','warn'
                     elseif h > Config.Physics.AirborneHeight and vel.z < -5 then warning,severity='FAST DESCENT','warn'
                     elseif descending then warning='SOFT LANDING'
+                    elseif reserveActive then warning,severity='LANDING RESERVE','critical'
                     elseif gas < Config.MaxPressure*.2 then warning,severity='LOW GAS','warn'
                     elseif preset then warning=('%s %s %.0f/360'):format(preset.name,preset.phase,preset.progress)
                     elseif h <= Config.Physics.AirborneHeight then warning='ON GROUND' end

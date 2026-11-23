@@ -1,0 +1,14 @@
+-- QBCore + qb-inventory: paste both entries INSIDE the existing
+-- qb-core/shared/items.lua item table. Do not replace the whole file.
+['rs_thruster_kit'] = {
+    name = 'rs_thruster_kit', label = 'RS Thruster Kit', weight = 6000,
+    type = 'item', image = 'rs_thruster_kit.png', unique = true,
+    useable = true, shouldClose = true,
+    description = 'Install a cold-gas flight and hover kit on a parked automobile.'
+},
+['rs_thruster_refill'] = {
+    name = 'rs_thruster_refill', label = 'Thruster Gas Cartridge', weight = 1800,
+    type = 'item', image = 'rs_thruster_refill.png', unique = false,
+    useable = true, shouldClose = true,
+    description = 'Refill the cold-gas system installed on a vehicle.'
+},

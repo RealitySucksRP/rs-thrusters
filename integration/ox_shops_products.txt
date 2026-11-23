@@ -1,0 +1,5 @@
+-- ox_inventory/data/shops.lua: insert in an EXISTING shop's inventory.
+-- Use actual mechanic/blackmarket shop coordinates in that shop definition.
+-- If RS Zombiemart/RS Blackmarket owns shops, edit its own catalog instead.
+{ name = 'rs_thruster_kit', price = 25000, count = 10 },
+{ name = 'rs_thruster_refill', price = 2500, count = 25 },
